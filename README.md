@@ -44,6 +44,35 @@ docker compose up -d --build
 
 فایل `plans.json` — مبلغ به **ریال**، حداقل ۱۰٬۰۰۰ (محدودیت نوینو).
 
+## سرورها
+
+برای **چند سرور**، فایل `servers.json` بساز (نمونه: `servers.json.example`):
+
+```json
+[
+  {
+    "id": "de",
+    "title": "🇩🇪 آلمان",
+    "base_url": "https://de.example.com",
+    "admin_path": "...",
+    "api_key": "...",
+    "user_path": "..."
+  }
+]
+```
+
+اگر `servers.json` نباشد، از متغیرهای `HIDDIFY_*` در `.env` یک سرور ساخته می‌شود (رفتار قبلی).
+
+- **یک سرور**: بعد از انتخاب پلن مستقیم لینک پرداخت
+- **چند سرور**: پلن → انتخاب سرور → لینک پرداخت
+
+در docker می‌توانی mount کنی:
+
+```yaml
+volumes:
+  - ./servers.json:/app/servers.json:ro
+```
+
 ## جریان کار
 
 1. کاربر `/start` → انتخاب پلن

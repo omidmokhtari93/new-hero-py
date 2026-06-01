@@ -8,11 +8,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from telegram import Update
 
 from bot.config import (
-    HIDDIFY_BASE_URL,
     NOVINOPAY_MERCHANT_ID,
     PAYMENT_CALLBACK_BASE,
     PLANS,
     PLANS_BY_ID,
+    SERVERS,
+    SERVERS_BY_ID,
 )
 from bot.db import get_order_by_authority, init_db, mark_failed, mark_paid
 from bot.hiddify import create_user, subscription_url
@@ -37,7 +38,7 @@ def _telegram_webhook_url() -> str:
 def _log_startup() -> None:
     log.info("=== vpn-bot starting ===")
     log.info("plans loaded: %s", [p.id for p in PLANS])
-    log.info("hiddify base=%s", HIDDIFY_BASE_URL)
+    log.info("servers loaded: %s", [(s.id, s.title) for s in SERVERS])
     log.info("payment callback base=%s", PAYMENT_CALLBACK_BASE)
     log.info("telegram mode=%s", "webhook" if _use_webhook() else "polling")
     merchant = NOVINOPAY_MERCHANT_ID
@@ -143,11 +144,12 @@ async def payment_callback(
         return HTMLResponse("<h3>سفارش نامعتبر</h3>", status_code=400)
 
     log.info(
-        "order matched id=%s telegram_id=%s status=%s plan=%s amount=%s",
+        "order matched id=%s telegram_id=%s status=%s plan=%s server=%s amount=%s",
         order["id"],
         order["telegram_id"],
         order["status"],
         order["plan_id"],
+        order.get("server_id", "default"),
         order["amount_rial"],
     )
 
@@ -160,6 +162,12 @@ async def payment_callback(
         log.error("unknown plan_id=%s for order %s", order["plan_id"], order["id"])
         mark_failed(order["id"])
         return HTMLResponse("<h3>پلن نامعتبر</h3>", status_code=400)
+
+    server = SERVERS_BY_ID.get(order.get("server_id") or "default")
+    if not server:
+        log.error("unknown server_id=%s for order %s", order.get("server_id"), order["id"])
+        mark_failed(order["id"])
+        return HTMLResponse("<h3>سرور نامعتبر</h3>", status_code=400)
 
     try:
         ok = await verify_payment(order["amount_rial"], Authority)
@@ -176,14 +184,15 @@ async def payment_callback(
         return HTMLResponse("<h3>تایید پرداخت ناموفق</h3>")
 
     try:
-        user = await create_user(order["telegram_id"], plan)
+        user = await create_user(server, order["telegram_id"], plan)
         uid = user["uuid"]
-        sub = subscription_url(uid)
+        sub = subscription_url(server, uid)
         mark_paid(order["id"], uid)
         log.info(
-            "order %s completed telegram_id=%s hiddify_uuid=%s sub=%s",
+            "order %s completed telegram_id=%s server=%s hiddify_uuid=%s sub=%s",
             order["id"],
             order["telegram_id"],
+            server.id,
             uid,
             sub,
         )
@@ -192,6 +201,7 @@ async def payment_callback(
             order["telegram_id"],
             f"✅ پرداخت موفق!\n\n"
             f"پلن: {plan.title}\n"
+            f"سرور: {server.title}\n"
             f"لینک اشتراک:\n{sub}\n\n"
             "این لینک را در Hiddify یا هر کلاینت سازگار import کن.",
         )

@@ -3,39 +3,33 @@ from datetime import date
 
 import httpx
 
-from bot.config import (
-    HIDDIFY_ADMIN_PATH,
-    HIDDIFY_API_KEY,
-    HIDDIFY_BASE_URL,
-    HIDDIFY_USER_PATH,
-    Plan,
-)
+from bot.config import Plan, Server
 
 log = logging.getLogger(__name__)
 
 
-def _admin_url(path: str) -> str:
-    return f"{HIDDIFY_BASE_URL}/{HIDDIFY_ADMIN_PATH}/api/v2/admin{path}"
+def _admin_url(server: Server, path: str) -> str:
+    return f"{server.base_url}/{server.admin_path}/api/v2/admin{path}"
 
 
-def _headers() -> dict[str, str]:
+def _headers(server: Server) -> dict[str, str]:
     return {
-        "Hiddify-API-Key": HIDDIFY_API_KEY,
+        "Hiddify-API-Key": server.api_key,
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
 
 
-def subscription_url(user_uuid: str) -> str:
-    return f"{HIDDIFY_BASE_URL}/{HIDDIFY_USER_PATH}/{user_uuid}/"
+def subscription_url(server: Server, user_uuid: str) -> str:
+    return f"{server.base_url}/{server.user_path}/{user_uuid}/"
 
 
-async def create_user(telegram_id: int, plan: Plan) -> dict:
+async def create_user(server: Server, telegram_id: int, plan: Plan) -> dict:
     name = f"tg_{telegram_id}_{date.today().isoformat()}"
     payload = {
-        "added_by_uuid": HIDDIFY_API_KEY,
+        "added_by_uuid": server.api_key,
         "name": name,
-        "comment": f"telegram:{telegram_id} plan:{plan.id}",
+        "comment": f"telegram:{telegram_id} plan:{plan.id} server:{server.id}",
         "current_usage_GB": 0,
         "enable": True,
         "is_active": True,
@@ -47,38 +41,40 @@ async def create_user(telegram_id: int, plan: Plan) -> dict:
     }
 
     log.info(
-        "hiddify create user telegram_id=%s plan=%s name=%s days=%s gb_limit=%s",
+        "hiddify create user server=%s telegram_id=%s plan=%s name=%s",
+        server.id,
         telegram_id,
         plan.id,
         name,
-        plan.days,
-        payload["usage_limit_GB"],
     )
 
     async with httpx.AsyncClient(timeout=60) as client:
         try:
-            r = await client.post(_admin_url("/user/"), headers=_headers(), json=payload)
+            r = await client.post(
+                _admin_url(server, "/user/"), headers=_headers(server), json=payload
+            )
             r.raise_for_status()
             user = r.json()
         except httpx.HTTPStatusError as e:
             log.error(
-                "hiddify create HTTP %s body=%s",
+                "hiddify create HTTP %s server=%s body=%s",
                 e.response.status_code,
+                server.id,
                 e.response.text[:500],
             )
             raise
         except httpx.HTTPError as e:
-            log.error("hiddify create network error: %s", e)
+            log.error("hiddify create network error server=%s: %s", server.id, e)
             raise
 
         uid = user.get("uuid")
-        log.info("hiddify user created uuid=%s", uid)
+        log.info("hiddify user created server=%s uuid=%s", server.id, uid)
 
         if uid:
             try:
                 await client.patch(
-                    _admin_url(f"/user/{uid}/"),
-                    headers=_headers(),
+                    _admin_url(server, f"/user/{uid}/"),
+                    headers=_headers(server),
                     json={**payload, "uuid": uid},
                 )
                 log.debug("hiddify user %s patch OK", uid)

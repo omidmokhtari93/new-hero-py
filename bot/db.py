@@ -17,6 +17,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telegram_id INTEGER NOT NULL,
                 plan_id TEXT NOT NULL,
+                server_id TEXT NOT NULL DEFAULT 'default',
                 amount_rial INTEGER NOT NULL,
                 authority TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
@@ -25,6 +26,12 @@ def init_db() -> None:
             )
             """
         )
+        cols = {row[1] for row in c.execute("PRAGMA table_info(orders)")}
+        if "server_id" not in cols:
+            c.execute(
+                "ALTER TABLE orders ADD COLUMN server_id TEXT NOT NULL DEFAULT 'default'"
+            )
+            log.info("database migrated: added server_id column")
     log.info("database ready path=%s", DB_PATH)
 
 
@@ -39,18 +46,19 @@ def _conn():
         conn.close()
 
 
-def create_order(telegram_id: int, plan_id: str, amount_rial: int) -> int:
+def create_order(telegram_id: int, plan_id: str, server_id: str, amount_rial: int) -> int:
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO orders (telegram_id, plan_id, amount_rial) VALUES (?, ?, ?)",
-            (telegram_id, plan_id, amount_rial),
+            "INSERT INTO orders (telegram_id, plan_id, server_id, amount_rial) VALUES (?, ?, ?, ?)",
+            (telegram_id, plan_id, server_id, amount_rial),
         )
         order_id = int(cur.lastrowid)
     log.info(
-        "order created id=%s telegram_id=%s plan=%s amount=%s",
+        "order created id=%s telegram_id=%s plan=%s server=%s amount=%s",
         order_id,
         telegram_id,
         plan_id,
+        server_id,
         amount_rial,
     )
     return order_id
