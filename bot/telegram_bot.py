@@ -1,5 +1,6 @@
 import html
 import logging
+import time
 from datetime import datetime
 from urllib.parse import quote
 
@@ -11,6 +12,7 @@ from telegram import (
 )
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
@@ -35,6 +37,11 @@ from bot.db import create_order, get_all_users, get_order, get_user_orders, mark
 from bot.hiddify import create_user, subscription_url
 
 log = logging.getLogger(__name__)
+
+# Simple in-memory rate limiting
+# {user_id: last_action_timestamp}
+_user_last_action = {}
+RATE_LIMIT_SECONDS = 1
 
 
 def _main_keyboard() -> ReplyKeyboardMarkup:
@@ -70,6 +77,19 @@ def _servers_keyboard(plan_index: int) -> InlineKeyboardMarkup:
             ]
         )
     return InlineKeyboardMarkup(rows)
+
+
+async def _rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id if update.effective_user else None
+    
+    if user_id and user_id != ADMIN_CHAT_ID:
+        now = time.time()
+        if user_id in _user_last_action:
+            last_action = _user_last_action[user_id]
+            if now - last_action < RATE_LIMIT_SECONDS:
+                log.warning("Rate limit hit for user %s", user_id)
+                raise ApplicationHandlerStop()
+        _user_last_action[user_id] = now
 
 
 async def _log_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -458,7 +478,11 @@ def build_telegram_app() -> Application:
         .build()
     )
     app.add_error_handler(_on_error)
-    app.add_handler(TypeHandler(Update, _log_update, block=False), group=-1)
+    # Group -2: Rate Limiting (Blocking)
+    app.add_handler(TypeHandler(Update, _rate_limit_middleware), group=-2)
+    # Group -1: Logging (Non-blocking)
+    app.add_handler(TypeHandler(Update, _log_update), group=-1)
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Text("خرید سرویس جدید"), buy_service))
     app.add_handler(MessageHandler(filters.Text("سرویس های من"), my_services))
