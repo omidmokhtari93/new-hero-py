@@ -86,3 +86,22 @@ async def create_user(server: Server, telegram_id: int, plan: Plan) -> dict:
                 log.warning("hiddify user %s patch skipped: %s", uid, e)
 
         return user
+
+
+async def get_user(server: Server, user_uuid: str, client: httpx.AsyncClient = None) -> dict:
+    if client is None:
+        async with httpx.AsyncClient(timeout=10) as new_client:
+            return await _get_user_req(server, user_uuid, new_client)
+    return await _get_user_req(server, user_uuid, client)
+
+
+async def _get_user_req(server: Server, user_uuid: str, client: httpx.AsyncClient) -> dict:
+    try:
+        r = await client.get(
+            _admin_url(server, f"/user/{user_uuid}/"), headers=_headers(server)
+        )
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPError as e:
+        log.error("hiddify get user error server=%s uuid=%s: %s", server.id, user_uuid, e)
+        return {}

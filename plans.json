@@ -1,16 +1,23 @@
 [
   {
-    "id": "30d_50gb",
-    "title": "یک ماه — ۵۰ گیگ",
+    "id": "1month_10gb",
+    "title": "یک ماه — ۱۰ گیگ",
     "days": 30,
-    "gb": 50,
-    "price_rial": 99000
+    "gb": 10,
+    "price_rial": 1500000
   },
   {
-    "id": "30d_unlimited",
-    "title": "یک ماه — نامحدود",
+    "id": "1month_20gb",
+    "title": "یک ماه — ۲۰ گیگ",
     "days": 30,
-    "gb": 0,
-    "price_rial": 149000
+    "gb": 20,
+    "price_rial": 2500000
+  },
+  {
+    "id": "1month_30gb",
+    "title": "یک ماه — ۳۰ گیگ",
+    "days": 30,
+    "gb": 30,
+    "price_rial": 3500000
   }
 ]

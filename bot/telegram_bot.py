@@ -2,6 +2,8 @@ import html
 import logging
 import shutil
 import time
+import asyncio
+import httpx
 from datetime import datetime
 
 import jdatetime
@@ -46,7 +48,7 @@ from bot.db import (
     mark_failed,
     search_order_by_uuid,
 )
-from bot.hiddify import create_user, subscription_url
+from bot.hiddify import create_user, get_user, subscription_url
 
 log = logging.getLogger(__name__)
 
@@ -273,14 +275,35 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
+    msg = await update.message.reply_text("⏳ در حال دریافت اطلاعات سرویس‌ها...")
+
+    # Fetch all user data in parallel
+    async with httpx.AsyncClient(timeout=10) as client:
+        tasks = []
+        valid_orders = []
+        for order in orders:
+            server = SERVERS_BY_ID.get(order["server_id"])
+            if server:
+                tasks.append(get_user(server, order["hiddify_uuid"], client=client))
+                valid_orders.append((order, server))
+        
+        h_users = await asyncio.gather(*tasks)
+
     text = "👤 <b>سرویس‌های اخیر شما:</b>\n\n"
-    for i, order in enumerate(orders, 1):
-        server = SERVERS_BY_ID.get(order["server_id"])
-        if not server:
-            continue
-            
+    for (order, server), h_user in zip(valid_orders, h_users):
         sub_url = subscription_url(server, order["hiddify_uuid"], label=f"HeroVPN - {server.title}")
         
+        usage_text = ""
+        if h_user:
+            usage_gb = h_user.get("current_usage_GB", 0)
+            limit_gb = h_user.get("usage_limit_GB", 0)
+            rem_days = h_user.get("remaining_days", "نامحدود")
+            
+            usage_text = (
+                f"📊 مصرف: <code>{usage_gb:.2f}</code> از <code>{limit_gb}</code> گیگ\n"
+                f"⏳ زمان باقی‌مانده: <code>{rem_days}</code> روز\n"
+            )
+
         # Parse SQLite UTC timestamp
         try:
             dt = datetime.strptime(order["created_at"], "%Y-%m-%d %H:%M:%S")
@@ -289,13 +312,14 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             jalali_date = order["created_at"]
         
         text += (
-            f"{i}. 🌍 لوکیشن: {server.title}\n"
+            f"🌍 لوکیشن: {server.title}\n"
             f"📅 تاریخ فعال‌سازی: <code>{jalali_date}</code>\n"
+            f"{usage_text}"
             f"🔗 لینک اشتراک (برای کپی لمس کنید):\n<code>{sub_url}</code>\n"
             f"--------------------------\n"
         )
 
-    await update.message.reply_text(text, parse_mode="HTML")
+    await msg.edit_text(text, parse_mode="HTML")
 
 
 async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -368,6 +392,18 @@ async def search_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     sub_url = subscription_url(server, order["hiddify_uuid"], label=f"HeroVPN - {server.title}")
     
+    # Get usage info from Hiddify for admin search
+    h_user = await get_user(server, order["hiddify_uuid"])
+    usage_info = ""
+    if h_user:
+        usage_gb = h_user.get("current_usage_GB", 0)
+        limit_gb = h_user.get("usage_limit_GB", 0)
+        rem_days = h_user.get("remaining_days", "نامحدود")
+        usage_info = (
+            f"📊 مصرف: <code>{usage_gb:.2f}</code> از <code>{limit_gb}</code> گیگ\n"
+            f"⏳ زمان باقی‌مانده: <code>{rem_days}</code> روز\n"
+        )
+
     # Parse date
     try:
         dt = datetime.strptime(order["created_at"], "%Y-%m-%d %H:%M:%S")
@@ -384,6 +420,7 @@ async def search_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"💎 پلن: {order['plan_id']}\n"
         f"🌍 لوکیشن: {server.title}\n"
         f"📅 تاریخ فعال‌سازی: <code>{jalali_date}</code>\n"
+        f"{usage_info}"
         f"💵 مبلغ پرداخت شده: {order['amount_rial']:,} ریال\n"
         f"🔑 UUID: <code>{order['hiddify_uuid']}</code>\n\n"
         f"🔗 لینک اشتراک:\n<code>{sub_url}</code>"
