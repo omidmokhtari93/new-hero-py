@@ -64,15 +64,9 @@ def create_order(telegram_id: int, plan_id: str, server_id: str, amount_rial: in
     return order_id
 
 
-def set_authority(order_id: int, authority: str) -> None:
+def get_order(order_id: int):
     with _conn() as c:
-        c.execute("UPDATE orders SET authority = ? WHERE id = ?", (authority, order_id))
-    log.info("order %s authority set=%s", order_id, authority)
-
-
-def get_order_by_authority(authority: str):
-    with _conn() as c:
-        row = c.execute("SELECT * FROM orders WHERE authority = ?", (authority,)).fetchone()
+        row = c.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
         return dict(row) if row else None
 
 
@@ -89,3 +83,12 @@ def mark_failed(order_id: int) -> None:
     with _conn() as c:
         c.execute("UPDATE orders SET status = 'failed' WHERE id = ?", (order_id,))
     log.warning("order %s marked failed", order_id)
+
+
+def get_user_orders(telegram_id: int, limit: int = 5) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM orders WHERE telegram_id = ? AND status = 'paid' ORDER BY created_at DESC LIMIT ?",
+            (telegram_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]

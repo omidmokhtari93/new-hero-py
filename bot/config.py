@@ -35,42 +35,21 @@ def _load_plans() -> list[Plan]:
 
 def _load_servers() -> list[Server]:
     path = Path(os.getenv("SERVERS_FILE", "servers.json"))
-    if path.is_file():
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return [
-            Server(
-                id=s["id"],
-                title=s["title"],
-                base_url=s["base_url"].rstrip("/"),
-                admin_path=s["admin_path"].strip("/"),
-                api_key=s["api_key"],
-                user_path=s["user_path"].strip("/"),
-            )
-            for s in data
-        ]
-
-    base = os.getenv("HIDDIFY_BASE_URL", "").rstrip("/")
-    if base:
-        return [
-            Server(
-                id="default",
-                title=os.getenv("HIDDIFY_SERVER_TITLE", "سرور ۱"),
-                base_url=base,
-                admin_path=os.environ["HIDDIFY_ADMIN_PATH"].strip("/"),
-                api_key=os.environ["HIDDIFY_API_KEY"],
-                user_path=os.environ["HIDDIFY_USER_PATH"].strip("/"),
-            )
-        ]
-
-    raise RuntimeError("هیچ سروری تعریف نشده — servers.json یا متغیرهای HIDDIFY_*")
-
-
-def _normalize_public_base(url: str) -> str:
-    url = url.rstrip("/")
-    for suffix in ("/payment/callback", "/callback"):
-        if url.endswith(suffix):
-            url = url[: -len(suffix)].rstrip("/")
-    return url
+    if not path.is_file():
+        raise RuntimeError(f"فایل سرورها یافت نشد: {path}")
+    
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return [
+        Server(
+            id=s["id"],
+            title=s["title"],
+            base_url=s["base_url"].rstrip("/"),
+            admin_path=s["admin_path"].strip("/"),
+            api_key=s["api_key"],
+            user_path=s["user_path"].strip("/"),
+        )
+        for s in data
+    ]
 
 
 PLANS = _load_plans()
@@ -80,8 +59,9 @@ SERVERS = _load_servers()
 SERVERS_BY_ID = {s.id: s for s in SERVERS}
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 
-NOVINOPAY_MERCHANT_ID = os.getenv("NOVINOPAY_MERCHANT_ID", "test")
-PAYMENT_CALLBACK_BASE = _normalize_public_base(os.environ["PAYMENT_CALLBACK_BASE"])
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "3991553456"))
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "@hero_support1")
 
 DB_PATH = os.getenv("DB_PATH", "data/orders.db")
