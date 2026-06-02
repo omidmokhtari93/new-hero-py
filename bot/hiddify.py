@@ -103,5 +103,39 @@ async def _get_user_req(server: Server, user_uuid: str, client: httpx.AsyncClien
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError as e:
-        log.error("hiddify get user error server=%s uuid=%s: %s", server.id, user_uuid, e)
-        return {}
+            log.error("hiddify get user error server=%s uuid=%s: %s", server.id, user_uuid, e)
+            return {}
+
+
+async def update_user_status(server: Server, user_uuid: str, enable: bool) -> bool:
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            # For Hiddify API v2, sending only the fields we want to change is often better
+            payload = {"enable": enable}
+            r = await client.patch(
+                _admin_url(server, f"/user/{user_uuid}/"),
+                headers=_headers(server),
+                json=payload
+            )
+            r.raise_for_status()
+            log.info("hiddify user status updated server=%s uuid=%s enable=%s", server.id, user_uuid, enable)
+            return True
+        except httpx.HTTPError as e:
+            log.error("hiddify update user error server=%s uuid=%s: %s", server.id, user_uuid, e)
+            if hasattr(e, 'response') and e.response:
+                log.error("hiddify error response: %s", e.response.text)
+            return False
+
+
+async def delete_user(server: Server, user_uuid: str) -> bool:
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.delete(
+                _admin_url(server, f"/user/{user_uuid}/"),
+                headers=_headers(server)
+            )
+            r.raise_for_status()
+            return True
+        except httpx.HTTPError as e:
+            log.error("hiddify delete user error server=%s uuid=%s: %s", server.id, user_uuid, e)
+            return False

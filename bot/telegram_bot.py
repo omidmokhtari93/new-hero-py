@@ -48,7 +48,13 @@ from bot.db import (
     mark_failed,
     search_order_by_uuid,
 )
-from bot.hiddify import create_user, get_user, subscription_url
+from bot.hiddify import (
+    create_user,
+    delete_user,
+    get_user,
+    subscription_url,
+    update_user_status,
+)
 
 log = logging.getLogger(__name__)
 
@@ -297,7 +303,12 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if h_user:
             usage_gb = h_user.get("current_usage_GB", 0)
             limit_gb = h_user.get("usage_limit_GB", 0)
-            rem_days = h_user.get("remaining_days", "نامحدود")
+            
+            # Robust extraction of remaining days
+            rem_days = h_user.get("remaining_days")
+            if rem_days is None:
+                # Fallback to package_days if countdown hasn't started
+                rem_days = h_user.get("package_days", "نامحدود")
             
             usage_text = (
                 f"📊 مصرف: <code>{usage_gb:.2f}</code> از <code>{limit_gb}</code> گیگ\n"
@@ -312,6 +323,7 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             jalali_date = order["created_at"]
         
         text += (
+            f"📦 شماره سفارش: <code>{order['id']}</code>\n"
             f"🌍 لوکیشن: {server.title}\n"
             f"📅 تاریخ فعال‌سازی: <code>{jalali_date}</code>\n"
             f"{usage_text}"
@@ -362,6 +374,77 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
 
+async def _refresh_search_message(query, order_id: int) -> None:
+    order = get_order(order_id)
+    if not order:
+        await query.answer("سفارش یافت نشد.", show_alert=True)
+        return
+
+    server = SERVERS_BY_ID.get(order["server_id"])
+    if not server:
+        await query.answer("سرور یافت نشد.", show_alert=True)
+        return
+
+    # Fetch fresh data from Hiddify
+    h_user = await get_user(server, order["hiddify_uuid"])
+    
+    usage_info = ""
+    status_text = "❓ نامشخص"
+    if h_user:
+        usage_gb = h_user.get("current_usage_GB", 0)
+        limit_gb = h_user.get("usage_limit_GB", 0)
+        
+        # Robust extraction of remaining days
+        rem_days = h_user.get("remaining_days")
+        if rem_days is None:
+            # Fallback to package_days if countdown hasn't started
+            rem_days = h_user.get("package_days", "نامحدود")
+
+        is_enabled = h_user.get("enable", True)
+        
+        status_text = "✅ فعال" if is_enabled else "🔒 غیرفعال"
+        usage_info = (
+            f"📊 مصرف: <code>{usage_gb:.2f}</code> از <code>{limit_gb}</code> گیگ\n"
+            f"⏳ زمان باقی‌مانده: <code>{rem_days}</code> روز\n"
+            f"🛡️ وضعیت: <b>{status_text}</b>\n"
+        )
+
+    sub_url = subscription_url(server, order["hiddify_uuid"], label=f"HeroVPN - {server.title}")
+    
+    try:
+        dt = datetime.strptime(order["created_at"], "%Y-%m-%d %H:%M:%S")
+        jalali_date = _to_jalali(dt)
+    except Exception:
+        jalali_date = order["created_at"]
+
+    text = (
+        f"🔍 <b>اطلاعات سرویس به‌روز شده:</b>\n\n"
+        f"📦 شماره سفارش: <code>{order['id']}</code>\n"
+        f"🆔 آیدی کاربر: <code>{order['telegram_id']}</code>\n"
+        f"💎 پلن: {order['plan_id']}\n"
+        f"🌍 لوکیشن: {server.title}\n"
+        f"📅 تاریخ فعال‌سازی: <code>{jalali_date}</code>\n"
+        f"{usage_info}"
+        f"💵 مبلغ پرداخت شده: {order['amount_rial']:,} ریال\n"
+        f"🔑 UUID: <code>{order['hiddify_uuid']}</code>\n\n"
+        f"🔗 لینک اشتراک:\n<code>{sub_url}</code>"
+    )
+
+    admin_actions = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🔓 فعال‌سازی", callback_data=f"adm_ena:{order['id']}"),
+                InlineKeyboardButton("🔒 غیرفعال‌سازی", callback_data=f"adm_dis:{order['id']}"),
+            ],
+            [
+                InlineKeyboardButton("🗑️ حذف کامل سرویس", callback_data=f"adm_del:{order['id']}"),
+            ]
+        ]
+    )
+
+    await query.edit_message_text(text, reply_markup=admin_actions, parse_mode="HTML")
+
+
 async def search_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != ADMIN_CHAT_ID:
         return
@@ -371,15 +454,20 @@ async def search_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     search_query = original_text.replace("#search", "").strip()
     
     if not search_query:
-        await update.message.reply_text("⚠️ لطفا UUID یا لینک ساب را برای جستجو وارد کنید.")
+        await update.message.reply_text("⚠️ لطفا شماره سفارش، UUID یا لینک ساب را برای جستجو وارد کنید.")
         return
 
-    # Extract UUID from URL if needed
-    uuid = search_query
-    if "/" in search_query:
-        uuid = search_query.rstrip("/").split("/")[-1]
+    order = None
+    # Try searching by Order ID first if query is numeric
+    if search_query.isdigit():
+        order = get_order(int(search_query))
 
-    order = search_order_by_uuid(uuid)
+    # If not found by ID, try UUID/URL
+    if not order:
+        uuid = search_query
+        if "/" in search_query:
+            uuid = search_query.rstrip("/").split("/")[-1]
+        order = search_order_by_uuid(uuid)
     
     if not order:
         await update.message.reply_text("❌ سفارشی با این مشخصات یافت نشد.")
@@ -398,7 +486,13 @@ async def search_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if h_user:
         usage_gb = h_user.get("current_usage_GB", 0)
         limit_gb = h_user.get("usage_limit_GB", 0)
-        rem_days = h_user.get("remaining_days", "نامحدود")
+        
+        # Robust extraction of remaining days
+        rem_days = h_user.get("remaining_days")
+        if rem_days is None:
+            # Fallback to package_days if countdown hasn't started
+            rem_days = h_user.get("package_days", "نامحدود")
+
         usage_info = (
             f"📊 مصرف: <code>{usage_gb:.2f}</code> از <code>{limit_gb}</code> گیگ\n"
             f"⏳ زمان باقی‌مانده: <code>{rem_days}</code> روز\n"
@@ -426,7 +520,19 @@ async def search_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"🔗 لینک اشتراک:\n<code>{sub_url}</code>"
     )
 
-    await update.message.reply_text(text, parse_mode="HTML")
+    admin_actions = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🔓 فعال‌سازی", callback_data=f"adm_ena:{order['id']}"),
+                InlineKeyboardButton("🔒 غیرفعال‌سازی", callback_data=f"adm_dis:{order['id']}"),
+            ],
+            [
+                InlineKeyboardButton("🗑️ حذف کامل سرویس", callback_data=f"adm_del:{order['id']}"),
+            ]
+        ]
+    )
+
+    await update.message.reply_text(text, reply_markup=admin_actions, parse_mode="HTML")
 
 
 async def send_db_backup(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -631,6 +737,73 @@ async def on_admin_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
+async def on_admin_enable(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    order_id = int(query.data.split(":")[1])
+    order = get_order(order_id)
+    if not order: return
+
+    server = SERVERS_BY_ID.get(order["server_id"])
+    if not server: return
+
+    await query.answer("در حال فعال‌سازی...")
+    ok = await update_user_status(server, order["hiddify_uuid"], enable=True)
+    
+    if ok:
+        await _refresh_search_message(query, order_id)
+        await query.answer("✅ سرویس فعال شد", show_alert=True)
+    else:
+        await query.answer("❌ خطا در فعال‌سازی", show_alert=True)
+
+
+async def on_admin_disable(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    order_id = int(query.data.split(":")[1])
+    order = get_order(order_id)
+    if not order: return
+
+    server = SERVERS_BY_ID.get(order["server_id"])
+    if not server: return
+
+    await query.answer("در حال غیرفعال‌سازی...")
+    ok = await update_user_status(server, order["hiddify_uuid"], enable=False)
+    
+    if ok:
+        await _refresh_search_message(query, order_id)
+        await query.answer("🔒 سرویس غیرفعال شد", show_alert=True)
+    else:
+        await query.answer("❌ خطا در غیرفعال‌سازی", show_alert=True)
+
+
+async def on_admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    order_id = int(query.data.split(":")[1])
+    order = get_order(order_id)
+    if not order: return
+
+    server = SERVERS_BY_ID.get(order["server_id"])
+    if not server: return
+
+    await query.answer("در حال حذف...")
+    ok = await delete_user(server, order["hiddify_uuid"])
+    
+    if ok:
+        mark_failed(order_id) # Mark as failed/deleted in DB
+        await query.edit_message_text(f"🗑️ <b>سرویس با موفقیت از پنل هیدیفای و دیتابیس ربات حذف شد.</b>\n\n📦 شماره سفارش: <code>{order_id}</code>", parse_mode="HTML")
+        await query.answer("✅ حذف شد", show_alert=True)
+    else:
+        await query.answer("❌ خطا در حذف از پنل", show_alert=True)
+
+
 async def on_unhandled_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -664,6 +837,9 @@ def build_telegram_app() -> Application:
     app.add_handler(CallbackQueryHandler(on_server, pattern=r"^srv:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_approve, pattern=r"^adm_app:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_cancel, pattern=r"^adm_can:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_admin_enable, pattern=r"^adm_ena:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_admin_disable, pattern=r"^adm_dis:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_admin_delete, pattern=r"^adm_del:\d+$"))
     app.add_handler(CallbackQueryHandler(on_unhandled_callback))
     
     # Schedule DB backup
