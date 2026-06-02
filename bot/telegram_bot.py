@@ -279,7 +279,7 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if not server:
             continue
             
-        sub_url = subscription_url(server, order["hiddify_uuid"])
+        sub_url = subscription_url(server, order["hiddify_uuid"], label=f"HeroVPN - {server.title}")
         
         # Parse SQLite UTC timestamp
         try:
@@ -366,7 +366,7 @@ async def search_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("❌ سرور مربوط به این سفارش دیگر وجود ندارد.")
         return
 
-    sub_url = subscription_url(server, order["hiddify_uuid"])
+    sub_url = subscription_url(server, order["hiddify_uuid"], label=f"HeroVPN - {server.title}")
     
     # Parse date
     try:
@@ -539,7 +539,7 @@ async def on_admin_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         hiddify_uuid = user_data["uuid"]
         mark_paid(order_id, hiddify_uuid)
 
-        sub_url = subscription_url(server, hiddify_uuid)
+        sub_url = subscription_url(server, hiddify_uuid, label=f"HeroVPN - {server.title}")
 
         # Notify user
         await context.bot.send_message(

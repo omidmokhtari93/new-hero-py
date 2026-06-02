@@ -20,8 +20,12 @@ def _headers(server: Server) -> dict[str, str]:
     }
 
 
-def subscription_url(server: Server, user_uuid: str) -> str:
-    return f"{server.base_url}/{server.user_path}/{user_uuid}/"
+def subscription_url(server: Server, user_uuid: str, label: str = "") -> str:
+    url = f"{server.base_url}/{server.user_path}/{user_uuid}/"
+    if label:
+        from urllib.parse import quote
+        url += f"#{quote(label)}"
+    return url
 
 
 async def create_user(server: Server, telegram_id: int, plan: Plan) -> dict:
