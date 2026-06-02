@@ -105,3 +105,9 @@ def get_all_users() -> list[int]:
     with _conn() as c:
         rows = c.execute("SELECT DISTINCT telegram_id FROM orders").fetchall()
         return [row[0] for row in rows]
+
+
+def search_order_by_uuid(uuid: str):
+    with _conn() as c:
+        row = c.execute("SELECT * FROM orders WHERE hiddify_uuid = ?", (uuid,)).fetchone()
+        return dict(row) if row else None

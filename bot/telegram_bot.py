@@ -1,7 +1,11 @@
 import html
 import logging
+import shutil
 import time
 from datetime import datetime
+
+import jdatetime
+import pytz
 from urllib.parse import quote
 
 from telegram import (
@@ -33,20 +37,45 @@ from bot.config import (
     Plan,
     Server,
 )
-from bot.db import create_order, get_all_users, get_order, get_user_orders, mark_paid, mark_failed
+from bot.db import (
+    create_order,
+    get_all_users,
+    get_order,
+    get_user_orders,
+    mark_paid,
+    mark_failed,
+    search_order_by_uuid,
+)
 from bot.hiddify import create_user, subscription_url
 
 log = logging.getLogger(__name__)
 
 # Simple in-memory rate limiting
-# {user_id: last_action_timestamp}
 _user_last_action = {}
 RATE_LIMIT_SECONDS = 1
+
+# Track last backup time to prevent duplicates
+_last_backup_time = 0
+
+TEHRAN_TZ = pytz.timezone("Asia/Tehran")
+
+
+def _to_jalali(dt: datetime) -> str:
+    """Convert a datetime object to Jalali string."""
+    if dt.tzinfo is None:
+        dt = pytz.utc.localize(dt)
+    tehran_dt = dt.astimezone(TEHRAN_TZ)
+    return jdatetime.datetime.fromgregorian(datetime=tehran_dt).strftime("%Y/%m/%d %H:%M")
+
+
+def _get_jalali_now() -> str:
+    """Get current time in Jalali string."""
+    return _to_jalali(datetime.now(pytz.utc))
 
 
 def _main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        [["خرید سرویس جدید"], ["سرویس های من", "راهنمای اتصال"], ["ارتباط با پشتیبانی"]],
+        [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["👨‍💻 ارتباط با پشتیبانی"]],
         resize_keyboard=True,
     )
 
@@ -57,7 +86,7 @@ def _plans_keyboard() -> InlineKeyboardMarkup:
         rows.append(
             [
                 InlineKeyboardButton(
-                    f"{p.title} — {p.price_rial:,} ریال",
+                    f"💎 {p.title} — {p.price_rial:,} ریال",
                     callback_data=f"buy:{i}",
                 )
             ]
@@ -252,12 +281,16 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             
         sub_url = subscription_url(server, order["hiddify_uuid"])
         
-        # Simple date formatting from SQLite ISO string
-        date_str = order["created_at"].split(" ")[0] if " " in order["created_at"] else order["created_at"]
+        # Parse SQLite UTC timestamp
+        try:
+            dt = datetime.strptime(order["created_at"], "%Y-%m-%d %H:%M:%S")
+            jalali_date = _to_jalali(dt)
+        except Exception:
+            jalali_date = order["created_at"]
         
         text += (
             f"{i}. 🌍 لوکیشن: {server.title}\n"
-            f"📅 تاریخ فعال‌سازی: <code>{date_str}</code>\n"
+            f"📅 تاریخ فعال‌سازی: <code>{jalali_date}</code>\n"
             f"🔗 لینک اشتراک (برای کپی لمس کنید):\n<code>{sub_url}</code>\n"
             f"--------------------------\n"
         )
@@ -305,20 +338,119 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
 
+async def search_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+
+    original_text = update.message.text
+    # Extract search query (UUID or URL)
+    search_query = original_text.replace("#search", "").strip()
+    
+    if not search_query:
+        await update.message.reply_text("⚠️ لطفا UUID یا لینک ساب را برای جستجو وارد کنید.")
+        return
+
+    # Extract UUID from URL if needed
+    uuid = search_query
+    if "/" in search_query:
+        uuid = search_query.rstrip("/").split("/")[-1]
+
+    order = search_order_by_uuid(uuid)
+    
+    if not order:
+        await update.message.reply_text("❌ سفارشی با این مشخصات یافت نشد.")
+        return
+
+    server = SERVERS_BY_ID.get(order["server_id"])
+    if not server:
+        await update.message.reply_text("❌ سرور مربوط به این سفارش دیگر وجود ندارد.")
+        return
+
+    sub_url = subscription_url(server, order["hiddify_uuid"])
+    
+    # Parse date
+    try:
+        dt = datetime.strptime(order["created_at"], "%Y-%m-%d %H:%M:%S")
+        jalali_date = _to_jalali(dt)
+    except Exception:
+        jalali_date = order["created_at"]
+
+    user_info = f"👤 کاربر: {order['telegram_id']}"
+    
+    text = (
+        f"🔍 <b>اطلاعات سرویس یافت شده:</b>\n\n"
+        f"📦 شماره سفارش: <code>{order['id']}</code>\n"
+        f"🆔 آیدی کاربر: <code>{order['telegram_id']}</code>\n"
+        f"💎 پلن: {order['plan_id']}\n"
+        f"🌍 لوکیشن: {server.title}\n"
+        f"📅 تاریخ فعال‌سازی: <code>{jalali_date}</code>\n"
+        f"💵 مبلغ پرداخت شده: {order['amount_rial']:,} ریال\n"
+        f"🔑 UUID: <code>{order['hiddify_uuid']}</code>\n\n"
+        f"🔗 لینک اشتراک:\n<code>{sub_url}</code>"
+    )
+
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
 async def send_db_backup(context: ContextTypes.DEFAULT_TYPE) -> None:
+    global _last_backup_time
+    now = time.time()
+    
+    # Don't send if last backup was less than 50 minutes ago
+    if now - _last_backup_time < 3000:
+        log.info("Skipping scheduled backup, last one was too recent.")
+        return
+
     log.info("Starting scheduled DB backup to admin...")
     try:
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        now_dt = datetime.now(pytz.utc)
+        timestamp = now_dt.strftime("%Y-%m-%d_%H-%M")
+        jalali_now = _to_jalali(now_dt)
+        
         with open(DB_PATH, "rb") as db_file:
             await context.bot.send_document(
                 chat_id=ADMIN_CHAT_ID,
                 document=db_file,
                 filename=f"orders_backup_{timestamp}.db",
-                caption=f"📦 بک‌آپ خودکار دیتابیس\n📅 تاریخ: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                caption=f"📦 بک‌آپ خودکار دیتابیس\n📅 تاریخ: <code>{jalali_now}</code>",
+                parse_mode="HTML"
             )
+        _last_backup_time = now
         log.info("DB backup sent to admin successfully.")
     except Exception as e:
         log.error("Failed to send DB backup: %s", e)
+
+
+async def restore_db(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+
+    if not update.message.document or not update.message.document.file_name.endswith(".db"):
+        await update.message.reply_text("⚠️ لطفا یک فایل با پسوند .db ارسال کنید.")
+        return
+
+    try:
+        status_msg = await update.message.reply_text("⏳ در حال بازیابی دیتابیس...")
+        
+        # Download the file
+        new_file = await context.bot.get_file(update.message.document.file_id)
+        
+        # Create a backup of current DB before overwriting
+        backup_path = f"{DB_PATH}.bak"
+        shutil.copy2(DB_PATH, backup_path)
+        
+        # Save the new file
+        await new_file.download_to_drive(DB_PATH)
+        
+        await status_msg.edit_text(
+            "✅ دیتابیس با موفقیت بازیابی شد.\n"
+            f"نسخه قبلی جهت اطمینان در فایل <code>{backup_path}</code> ذخیره گردید.",
+            parse_mode="HTML"
+        )
+        log.info("Database restored by admin from telegram file.")
+    except Exception as e:
+        log.error("Database restore failed: %s", e)
+        await update.message.reply_text(f"❌ خطا در بازیابی دیتابیس: {e}")
 
 
 async def on_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -419,7 +551,7 @@ async def on_admin_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
         await query.edit_message_text(
-            f"{query.message.text_html}\n\n✅ تایید شد و سرویس ایجاد گشت.\nUUID: <code>{hiddify_uuid}</code>",
+            f"{query.message.text_html}\n\n✅ تایید شد و سرویس ایجاد گشت.\nUUID: <code>{hiddify_uuid}</code>\n🔗 لینک اشتراک:\n<code>{sub_url}</code>",
             parse_mode="HTML",
         )
 
@@ -484,11 +616,13 @@ def build_telegram_app() -> Application:
     app.add_handler(TypeHandler(Update, _log_update), group=-1)
     
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Text("خرید سرویس جدید"), buy_service))
-    app.add_handler(MessageHandler(filters.Text("سرویس های من"), my_services))
-    app.add_handler(MessageHandler(filters.Text("راهنمای اتصال"), connection_guide))
-    app.add_handler(MessageHandler(filters.Text("ارتباط با پشتیبانی"), support_contact))
+    app.add_handler(MessageHandler(filters.Text("🛍️ خرید سرویس جدید"), buy_service))
+    app.add_handler(MessageHandler(filters.Text("👤 سرویس‌های من"), my_services))
+    app.add_handler(MessageHandler(filters.Text("📖 راهنمای اتصال"), connection_guide))
+    app.add_handler(MessageHandler(filters.Text("👨‍💻 ارتباط با پشتیبانی"), support_contact))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#broadcast"), broadcast_message))
+    app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#search"), search_order))
+    app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#restore"), restore_db))
     app.add_handler(CallbackQueryHandler(on_plan, pattern=r"^buy:\d+$"))
     app.add_handler(CallbackQueryHandler(on_server, pattern=r"^srv:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_approve, pattern=r"^adm_app:\d+$"))
@@ -498,12 +632,15 @@ def build_telegram_app() -> Application:
     # Schedule DB backup
     job_queue = app.job_queue
     if job_queue:
-        job_queue.run_repeating(
-            send_db_backup, 
-            interval=BACKUP_INTERVAL_HOURS * 3600, 
-            first=10  # First backup after 10 seconds of startup
-        )
-        log.info("DB backup job scheduled every %d hours", BACKUP_INTERVAL_HOURS)
+        # Check if job already exists to prevent duplicates
+        if not job_queue.get_jobs_by_name("db_backup"):
+            job_queue.run_repeating(
+                send_db_backup, 
+                interval=BACKUP_INTERVAL_HOURS * 3600, 
+                first=3600,  # Start after 1 hour instead of immediate
+                name="db_backup"
+            )
+            log.info("DB backup job scheduled every %d hours", BACKUP_INTERVAL_HOURS)
     else:
         log.warning("JobQueue not available, DB backup will not run!")
 

@@ -1,109 +1,89 @@
-# ربات فروش VPN (Hiddify + Novinopay)
+# ربات فروش VPN (Hiddify + پرداخت کارت به کارت)
 
-ربات تلگرام مینیمال: انتخاب پلن → لینک پرداخت [نوینوپی](https://novinopay.com/docs) → ساخت کاربر در Hiddify → ارسال لینک اشتراک در تلگرام.
+این یک ربات تلگرام حرفه‌ای برای فروش اکانت‌های پنل هیدیفای (Hiddify Manager) است که بر اساس تایید دستی ادمین (پرداخت کارت به کارت) طراحی شده است.
 
-## پیش‌نیاز
+## ویژگی‌های کلیدی
+
+- **تایید دستی ادمین**: حذف درگاه‌های پرداخت مستقیم و جایگزینی با پروسه واریز وجه و تایید توسط ادمین.
+- **چند سرور و لوکیشن**: پشتیبانی از چندین سرور هیدیفای به صورت همزمان (لوکیشن‌های مختلف).
+- **تقویم شمسی**: نمایش تمامی تاریخ‌ها و زمان‌ها به صورت جلالی (خورشیدی) با تایم‌زون تهران.
+- **بخش سرویس‌های من**: امکان مشاهده ۵ خرید اخیر کاربر به همراه لینک اشتراک و تاریخ فعال‌سازی.
+- **راهنمای اتصال**: آموزش گام‌به‌گام برای سیستم‌عامل‌های Android، iOS و Windows (با تمرکز بر V2Box).
+- **امنیت آمار**: تولید شماره سفارش‌های ۶ رقمی رندوم برای جلوگیری از لو رفتن آمار فروش.
+- **Rate Limit**: محدودیت زمانی ۲ ثانیه‌ای بین پیام‌های کاربر برای جلوگیری از اسپم.
+- **بک‌آپ خودکار**: ارسال خودکار فایل دیتابیس هر ۱ ساعت یک‌بار به تلگرام ادمین.
+- **جستجوی پیشرفته**: قابلیت جستجوی اطلاعات یک سرویس توسط ادمین با استفاده از UUID یا لینک ساب.
+- **پیام همگانی (Broadcast)**: امکان ارسال پیام اطلاع‌رسانی به تمام کاربران ربات توسط ادمین.
+- **بازیابی دیتابیس (Restore)**: امکان بازگردانی فایل دیتابیس مستقیماً از داخل تلگرام.
+
+## پیش‌نیازها
 
 - پنل [Hiddify Manager](https://hiddify.com) با API فعال
-- مرچنت [نوینوپی](https://novinopay.com/docs) (برای تست: `test`)
 - توکن ربات از [@BotFather](https://t.me/BotFather)
-- آدرس عمومی برای `PAYMENT_CALLBACK_BASE` (همان `callback_url` در پنل نوینو)
+- سرور یا سیستمی که Docker روی آن نصب باشد.
 
-## تنظیم Novinopay
+## تنظیمات فایل `.env`
 
-طبق [مستندات فنی](https://novinopay.com/docs):
-
-1. **ایجاد تراکنش** — `POST https://api.novinopay.com/payment/ipg/v2/request`
-2. **بازگشت از درگاه** — پارامترهای `PaymentStatus`, `Authority`, `InvoiceID` به `callback_url`
-3. **تایید** — `POST https://api.novinopay.com/payment/ipg/v2/verification` (حداکثر ۱۰ دقیقه بعد از بازگشت)
-
-در `.env`:
+فایل `.env` را بر اساس نمونه زیر ایجاد کنید:
 
 ```bash
-NOVINOPAY_MERCHANT_ID=test          # تست؛ برای عملیاتی مرچنت واقعی
-PAYMENT_CALLBACK_BASE=https://bot.example.com
+TELEGRAM_BOT_TOKEN=your_bot_token
+ADMIN_CHAT_ID=3991553456
+ADMIN_USERNAME=@hero_support1
+WEBHOOK_URL=https://your-domain.com # (اختیاری - برای استفاده از وب‌هوک)
+BACKUP_INTERVAL_HOURS=1
 ```
 
-`callback_url` نهایی: `{PAYMENT_CALLBACK_BASE}/payment/callback`
+## پیکربندی پلن‌ها و سرورها
 
-## تنظیم Hiddify
-
-1. **Settings → API** — `HIDDIFY_API_KEY`
-2. **Admin Proxy Path** — `HIDDIFY_ADMIN_PATH`
-3. **User Proxy Path** — `HIDDIFY_USER_PATH`
-4. آدرس پنل — `HIDDIFY_BASE_URL`
-
-## اجرا
-
-```bash
-cp .env.example .env
-docker compose up -d --build
-```
-
-## پلن‌ها
-
-فایل `plans.json` — مبلغ به **ریال**، حداقل ۱۰٬۰۰۰ (محدودیت نوینو).
-
-## سرورها
-
-برای **چند سرور**، فایل `servers.json` بساز (نمونه: `servers.json.example`):
-
+### ۱. پلن‌ها (`plans.json`)
+لیست پلن‌های خود را در این فایل تعریف کنید (قیمت به ریال):
 ```json
 [
   {
-    "id": "de",
-    "title": "🇩🇪 آلمان",
-    "base_url": "https://de.example.com",
-    "admin_path": "...",
-    "api_key": "...",
-    "user_path": "..."
+    "id": "1month_50gb",
+    "title": "یک ماه — ۵۰ گیگ",
+    "price_rial": 1000000
   }
 ]
 ```
 
-اگر `servers.json` نباشد، از متغیرهای `HIDDIFY_*` در `.env` یک سرور ساخته می‌شود (رفتار قبلی).
-
-- **یک سرور**: بعد از انتخاب پلن مستقیم لینک پرداخت
-- **چند سرور**: پلن → انتخاب سرور → لینک پرداخت
-
-در docker می‌توانی mount کنی:
-
-```yaml
-volumes:
-  - ./servers.json:/app/servers.json:ro
+### ۲. سرورها (`servers.json`)
+اطلاعات سرورهای هیدیفای خود را در این فایل وارد کنید:
+```json
+[
+  {
+    "id": "germany1",
+    "title": "🇩🇪 آلمان",
+    "base_url": "https://panel.example.com",
+    "admin_path": "your_admin_path",
+    "api_key": "your_api_key",
+    "user_path": "your_user_path"
+  }
+]
 ```
 
-## جریان کار
+## قابلیت‌های مخصوص ادمین
 
-1. کاربر `/start` → انتخاب پلن
-2. ربات تراکنش نوینو می‌سازد و `payment_url` را می‌فرستد
-3. بعد از پرداخت، نوینو کاربر را با `PaymentStatus=OK` به callback برمی‌گرداند
-4. ربات verify می‌کند، اکانت Hiddify می‌سازد، لینک اشتراک را در تلگرام می‌فرستد
+ادمین اصلی (با `ADMIN_CHAT_ID` تعیین شده) به قابلیت‌های زیر دسترسی دارد:
 
-## لاگ
+- **تایید/لغو سفارش**: با هر سفارش کاربر، پیامی برای ادمین ارسال می‌شود که شامل دکمه‌های تایید و لغو است. با زدن تایید، اکانت ساخته شده و لینک برای کاربر ارسال می‌شود.
+- **ارسال پیام همگانی**: پیامی را بنویسید و در انتهای آن هشتگ `#broadcast` بگذارید تا برای همه ارسال شود.
+- **جستجوی سرویس**: UUID یا لینک ساب را بفرستید و هشتگ `#search` را اضافه کنید تا تمام جزئیات سفارش نمایش داده شود.
+- **بازیابی دیتابیس**: فایل `.db` را آپلود کنید و در کپشن آن هشتگ `#restore` را بنویسید.
+
+## اجرا
+
+برای اجرای پروژه با استفاده از داکر:
 
 ```bash
-docker compose logs -f vpn-bot
+docker compose up -d --build
 ```
 
-بعد از کلیک روی پلن باید ببینی:
-`telegram callback data='buy:0'` و `on_buy handler`
+## ساختار پروژه
 
-## عیب‌یابی دکمه‌های پلن
-
-1. **فقط یک instance** با همین توکن ربات اجرا شود (docker + اجرای محلی همزمان = callback گم می‌شود)
-2. بعد از rebuild حتماً **دوباره `/start`** بزن — دکمه‌های پیام قدیمی کار نمی‌کنند
-3. `PAYMENT_CALLBACK_BASE` فقط دامنه باشد، مثلاً `http://joorabino1.ir` (نه `/payment/callback`)
-4. اگر HTTPS داری، ربات خودکار **webhook** می‌زند روی `{BASE}/telegram/webhook` — nginx باید POST را به پورت 8080 پاس بدهد
-
-سطح لاگ با `LOG_LEVEL` (پیش‌فرض `INFO`، برای جزئیات بیشتر: `DEBUG`).
-
-## ساختار
-
-```
-bot/
-  payment.py       # Novinopay IPG v2
-  main.py          # callback + polling
-  hiddify.py
-  telegram_bot.py
-```
+- `bot/main.py`: نقطه ورود برنامه و مدیریت سرور/وب‌هوک.
+- `bot/telegram_bot.py`: منطق اصلی ربات تلگرام و هندلرها.
+- `bot/db.py`: مدیریت دیتابیس SQLite.
+- `bot/hiddify.py`: ارتباط با API پنل هیدیفای.
+- `bot/config.py`: مدیریت تنظیمات و فایل‌های JSON.
