@@ -60,6 +60,7 @@ SERVERS_BY_ID = {s.id: s for s in SERVERS}
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
+BOT_NAME = os.getenv("BOT_NAME", "HeroVPN")
 
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "3991553456"))
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "@hero_support1")

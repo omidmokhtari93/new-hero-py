@@ -30,6 +30,7 @@
 TELEGRAM_BOT_TOKEN=your_bot_token
 ADMIN_CHAT_ID=3991553456
 ADMIN_USERNAME=@hero_support1
+BOT_NAME=HeroVPN
 WEBHOOK_URL=https://your-domain.com # (اختیاری - برای استفاده از وب‌هوک)
 BACKUP_INTERVAL_HOURS=1
 ```

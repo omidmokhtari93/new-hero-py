@@ -31,6 +31,7 @@ from bot.config import (
     ADMIN_CHAT_ID,
     ADMIN_USERNAME,
     BACKUP_INTERVAL_HOURS,
+    BOT_NAME,
     DB_PATH,
     PLANS,
     SERVERS,
@@ -222,10 +223,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log.info("/start from telegram_id=%s username=%s", user.id, user.username)
     
+    welcome_text = (
+        f"🚀 <b>به ربات {BOT_NAME} خوش آمدید!</b>\n\n"
+        f"سلام {html.escape(user.first_name)} عزیز،\n"
+        f"ما اینجاییم تا بهترین و پرسرعت‌ترین سرویس‌های VPN را در اختیار شما قرار دهیم. ⚡️\n\n"
+        f"⭐️ <b>چرا {BOT_NAME}؟</b>\n"
+        f"🔹 اتصال پایدار و بدون قطعی\n"
+        f"🔹 تنوع در لوکیشن‌های پرسرعت\n"
+        f"🔹 پشتیبانی ۲۴ ساعته\n"
+        f"🔹 نصب و راه‌اندازی آسان\n\n"
+        f"👇 <b>برای شروع، یکی از گزینه‌های زیر را انتخاب کنید:</b>"
+    )
+    
     await update.message.reply_text(
-        "سلام! به ربات فروش VPN خوش آمدید.\n"
-        "یکی از گزینه‌های زیر را انتخاب کنید:",
+        welcome_text,
         reply_markup=_main_keyboard(),
+        parse_mode="HTML"
     )
 
 
