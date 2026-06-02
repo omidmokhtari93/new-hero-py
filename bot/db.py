@@ -1,4 +1,5 @@
 import logging
+import random
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -48,11 +49,17 @@ def _conn():
 
 def create_order(telegram_id: int, plan_id: str, server_id: str, amount_rial: int) -> int:
     with _conn() as c:
-        cur = c.execute(
-            "INSERT INTO orders (telegram_id, plan_id, server_id, amount_rial) VALUES (?, ?, ?, ?)",
-            (telegram_id, plan_id, server_id, amount_rial),
+        # Generate a unique random order ID
+        while True:
+            order_id = random.randint(111111, 999999)
+            exists = c.execute("SELECT id FROM orders WHERE id = ?", (order_id,)).fetchone()
+            if not exists:
+                break
+        
+        c.execute(
+            "INSERT INTO orders (id, telegram_id, plan_id, server_id, amount_rial) VALUES (?, ?, ?, ?, ?)",
+            (order_id, telegram_id, plan_id, server_id, amount_rial),
         )
-        order_id = int(cur.lastrowid)
     log.info(
         "order created id=%s telegram_id=%s plan=%s server=%s amount=%s",
         order_id,
@@ -92,3 +99,9 @@ def get_user_orders(telegram_id: int, limit: int = 5) -> list[dict]:
             (telegram_id, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def get_all_users() -> list[int]:
+    with _conn() as c:
+        rows = c.execute("SELECT DISTINCT telegram_id FROM orders").fetchall()
+        return [row[0] for row in rows]

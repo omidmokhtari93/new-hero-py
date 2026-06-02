@@ -1,5 +1,6 @@
 import html
 import logging
+from datetime import datetime
 from urllib.parse import quote
 
 from telegram import (
@@ -21,6 +22,8 @@ from telegram.ext import (
 from bot.config import (
     ADMIN_CHAT_ID,
     ADMIN_USERNAME,
+    BACKUP_INTERVAL_HOURS,
+    DB_PATH,
     PLANS,
     SERVERS,
     SERVERS_BY_ID,
@@ -28,7 +31,7 @@ from bot.config import (
     Plan,
     Server,
 )
-from bot.db import create_order, get_order, get_user_orders, mark_paid, mark_failed
+from bot.db import create_order, get_all_users, get_order, get_user_orders, mark_paid, mark_failed
 from bot.hiddify import create_user, subscription_url
 
 log = logging.getLogger(__name__)
@@ -36,7 +39,7 @@ log = logging.getLogger(__name__)
 
 def _main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        [["خرید سرویس جدید"], ["سرویس های من", "ارتباط با پشتیبانی"]],
+        [["خرید سرویس جدید"], ["سرویس های من", "راهنمای اتصال"], ["ارتباط با پشتیبانی"]],
         resize_keyboard=True,
     )
 
@@ -188,6 +191,28 @@ async def support_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
+async def connection_guide(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    guide_text = (
+        "📖 <b>راهنمای اتصال به سرویس‌ها</b>\n\n"
+        "برای استفاده از سرویس‌های ما، ابتدا باید لینک اشتراک (Subscription URL) خود را از بخش «سرویس‌های من» کپی کنید.\n\n"
+        "📱 <b>اندروید و iOS (نرم‌افزار V2Box):</b>\n"
+        "۱. نرم‌افزار <b>V2Box</b> را از اپ‌استور یا گوگل‌پلی نصب کنید.\n"
+        "۲. وارد برنامه شده و به بخش <b>Configs</b> بروید.\n"
+        "۳. روی علامت <b>+</b> در بالای صفحه بزنید.\n"
+        "۴. گزینه <b>Add Subscription</b> یا <b>Import v2ray link from clipboard</b> را انتخاب کنید.\n"
+        "۵. لینک اشتراک خود را وارد کرده و یک نام دلخواه بگذارید.\n"
+        "۶. در نهایت دکمه <b>Update Subscriptions</b> را بزنید و به سرور متصل شوید.\n\n"
+        "💻 <b>ویندوز (نرم‌افزار v2rayN):</b>\n"
+        "۱. نرم‌افزار <b>v2rayN</b> را دانلود و اجرا کنید.\n"
+        "۲. به بخش <b>Subscription Group</b> بروید.\n"
+        "۳. گزینه <b>Add</b> را بزنید و در قسمت URL، لینک اشتراک خود را وارد کنید.\n"
+        "۴. روی دکمه <b>Update subscription</b> بزنید تا لیست سرورها ظاهر شود.\n"
+        "۵. یک سرور را انتخاب کرده و دکمه <b>Enter</b> را بزنید تا متصل شوید.\n\n"
+        "⚠️ در صورت بروز هرگونه مشکل، با پشتیبانی در ارتباط باشید."
+    )
+    await update.message.reply_text(guide_text, parse_mode="HTML")
+
+
 async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     orders = get_user_orders(user.id, limit=5)
@@ -218,6 +243,62 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
 
     await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+
+    original_text = update.message.text
+    if "#broadcast" not in original_text:
+        return
+
+    # Remove the hashtag and clean up
+    broadcast_text = original_text.replace("#broadcast", "").strip()
+    if not broadcast_text:
+        await update.message.reply_text("⚠️ متن پیام همگانی خالی است.")
+        return
+
+    users = get_all_users()
+    count = 0
+    failed = 0
+
+    status_msg = await update.message.reply_text(f"⏳ در حال ارسال پیام به {len(users)} کاربر...")
+
+    for user_id in users:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=broadcast_text,
+                parse_mode="HTML"
+            )
+            count += 1
+        except Exception as e:
+            log.warning("Failed to send broadcast to %s: %s", user_id, e)
+            failed += 1
+
+    await status_msg.edit_text(
+        f"✅ ارسال پیام همگانی به پایان رسید.\n\n"
+        f"📊 آمار:\n"
+        f"✔️ موفق: {count}\n"
+        f"❌ ناموفق: {failed}"
+    )
+
+
+async def send_db_backup(context: ContextTypes.DEFAULT_TYPE) -> None:
+    log.info("Starting scheduled DB backup to admin...")
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        with open(DB_PATH, "rb") as db_file:
+            await context.bot.send_document(
+                chat_id=ADMIN_CHAT_ID,
+                document=db_file,
+                filename=f"orders_backup_{timestamp}.db",
+                caption=f"📦 بک‌آپ خودکار دیتابیس\n📅 تاریخ: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            )
+        log.info("DB backup sent to admin successfully.")
+    except Exception as e:
+        log.error("Failed to send DB backup: %s", e)
 
 
 async def on_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -381,11 +462,26 @@ def build_telegram_app() -> Application:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Text("خرید سرویس جدید"), buy_service))
     app.add_handler(MessageHandler(filters.Text("سرویس های من"), my_services))
+    app.add_handler(MessageHandler(filters.Text("راهنمای اتصال"), connection_guide))
     app.add_handler(MessageHandler(filters.Text("ارتباط با پشتیبانی"), support_contact))
+    app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#broadcast"), broadcast_message))
     app.add_handler(CallbackQueryHandler(on_plan, pattern=r"^buy:\d+$"))
     app.add_handler(CallbackQueryHandler(on_server, pattern=r"^srv:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_approve, pattern=r"^adm_app:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_cancel, pattern=r"^adm_can:\d+$"))
     app.add_handler(CallbackQueryHandler(on_unhandled_callback))
+    
+    # Schedule DB backup
+    job_queue = app.job_queue
+    if job_queue:
+        job_queue.run_repeating(
+            send_db_backup, 
+            interval=BACKUP_INTERVAL_HOURS * 3600, 
+            first=10  # First backup after 10 seconds of startup
+        )
+        log.info("DB backup job scheduled every %d hours", BACKUP_INTERVAL_HOURS)
+    else:
+        log.warning("JobQueue not available, DB backup will not run!")
+
     log.info("telegram handlers registered: start, plan, server, fallback")
     return app
