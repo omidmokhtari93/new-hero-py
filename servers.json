@@ -6,5 +6,13 @@
     "admin_path": "LUJu3I89plOKZJq9N",
     "api_key": "ffb8d113-15f3-49eb-adaa-74beff2037ae",
     "user_path": "2vlhk39OKwqdFz3gKdgViLu0Hwubv5"
+  },
+  {
+    "id": "us1",
+    "title": "🇺🇸 آمریکا",
+    "base_url": "https://us1.omidmokhtari93.workers.dev",
+    "admin_path": "XUUBu5i2w22dcVW0gXoeeW",
+    "api_key": "2c5e6043-b974-400c-832f-1cce73619f64",
+    "user_path": "XtKaNmiaOv5wGosZHItMvy7vi5pA"
   }
 ]
