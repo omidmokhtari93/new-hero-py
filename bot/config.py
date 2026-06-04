@@ -66,4 +66,4 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "3991553456"))
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "@hero_support1")
 
 DB_PATH = os.getenv("DB_PATH", "data/orders.db")
-BACKUP_INTERVAL_HOURS = int(os.getenv("BACKUP_INTERVAL_HOURS", "1"))
+BACKUP_INTERVAL_HOURS = int(os.getenv("BACKUP_INTERVAL_HOURS", "6"))

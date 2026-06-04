@@ -863,7 +863,7 @@ def build_telegram_app() -> Application:
             job_queue.run_repeating(
                 send_db_backup, 
                 interval=BACKUP_INTERVAL_HOURS * 3600, 
-                first=3600,  # Start after 1 hour instead of immediate
+                first=BACKUP_INTERVAL_HOURS * 3600,  # Start after the interval
                 name="db_backup"
             )
             log.info("DB backup job scheduled every %d hours", BACKUP_INTERVAL_HOURS)
