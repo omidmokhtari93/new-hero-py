@@ -481,7 +481,8 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await context.bot.send_message(
                 chat_id=user_id,
                 text=broadcast_text,
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=_main_keyboard(user_id)
             )
             count += 1
         except Exception as e:
