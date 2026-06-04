@@ -41,7 +41,9 @@ from bot.config import (
     Server,
 )
 from bot.db import (
+    count_all_orders,
     create_order,
+    get_all_orders_paginated,
     get_all_users,
     get_order,
     get_user_orders,
@@ -82,9 +84,12 @@ def _get_jalali_now() -> str:
     return _to_jalali(datetime.now(pytz.utc))
 
 
-def _main_keyboard() -> ReplyKeyboardMarkup:
+def _main_keyboard(user_id: int = None) -> ReplyKeyboardMarkup:
+    buttons = [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["👨‍💻 ارتباط با پشتیبانی"]]
+    if user_id == ADMIN_CHAT_ID:
+        buttons.append(["📊 لیست همه سفارشات"])
     return ReplyKeyboardMarkup(
-        [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["👨‍💻 ارتباط با پشتیبانی"]],
+        buttons,
         resize_keyboard=True,
     )
 
@@ -237,7 +242,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     
     await update.message.reply_text(
         welcome_text,
-        reply_markup=_main_keyboard(),
+        reply_markup=_main_keyboard(user.id),
         parse_mode="HTML"
     )
 
@@ -345,6 +350,110 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
 
     await msg.edit_text(text, parse_mode="HTML")
+
+
+async def admin_all_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+    await _send_orders_page(update, 0)
+
+
+async def _send_orders_page(update: Update, page: int) -> None:
+    limit = 5
+    offset = page * limit
+    orders = get_all_orders_paginated(limit, offset)
+    total_orders = count_all_orders()
+    total_pages = (total_orders + limit - 1) // limit
+
+    if not orders:
+        text = "📭 هیچ سفارشی یافت نشد."
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text)
+        else:
+            await update.message.reply_text(text)
+        return
+
+    # Fetch usage data for 'paid' orders in parallel
+    async with httpx.AsyncClient(timeout=10) as client:
+        tasks = []
+        valid_orders_info = []
+        for order in orders:
+            server = SERVERS_BY_ID.get(order["server_id"])
+            if order["status"] == "paid" and server:
+                tasks.append(get_user(server, order["hiddify_uuid"], client=client))
+                valid_orders_info.append((order, server))
+            else:
+                valid_orders_info.append((order, None))
+        
+        h_users_results = await asyncio.gather(*tasks)
+        
+        # Map results back to orders
+        h_users_map = {}
+        res_idx = 0
+        for order, server in valid_orders_info:
+            if order["status"] == "paid" and server:
+                h_users_map[order["id"]] = h_users_results[res_idx]
+                res_idx += 1
+
+    text = f"📊 <b>لیست تمامی سفارشات (صفحه {page + 1} از {total_pages}):</b>\n\n"
+    for order in orders:
+        server = SERVERS_BY_ID.get(order["server_id"])
+        status_icon = "✅" if order["status"] == "paid" else "⏳" if order["status"] == "pending" else "❌"
+        
+        usage_info = ""
+        if order["status"] == "paid" and server:
+            h_user = h_users_map.get(order["id"])
+            if h_user:
+                usage_gb = h_user.get("current_usage_GB", 0)
+                limit_gb = h_user.get("usage_limit_GB", 0)
+                rem_days = h_user.get("remaining_days")
+                if rem_days is None:
+                    rem_days = h_user.get("package_days", "نامحدود")
+                
+                usage_info = (
+                    f"📊 مصرف: <code>{usage_gb:.2f}/{limit_gb}</code> گیگ | ⏳ <code>{rem_days}</code> روز\n"
+                )
+
+        try:
+            dt = datetime.strptime(order["created_at"], "%Y-%m-%d %H:%M:%S")
+            jalali_date = _to_jalali(dt)
+        except Exception:
+            jalali_date = order["created_at"]
+
+        text += (
+            f"{status_icon} سفارش <code>{order['id']}</code> | 👤 {order['telegram_id']}\n"
+            f"📅 <code>{jalali_date}</code> | 🌍 {server.title if server else 'نامشخص'}\n"
+            f"{usage_info}"
+            f"--------------------------\n"
+        )
+
+    # Pagination buttons
+    keyboard_rows = []
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"adm_orders:{page - 1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"adm_orders:{page + 1}"))
+    
+    if nav_buttons:
+        keyboard_rows.append(nav_buttons)
+
+    reply_markup = InlineKeyboardMarkup(keyboard_rows)
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
+
+
+async def on_admin_orders_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id != ADMIN_CHAT_ID:
+        return
+    
+    await query.answer()
+    page = int(query.data.split(":")[1])
+    await _send_orders_page(update, page)
 
 
 async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -843,6 +952,7 @@ def build_telegram_app() -> Application:
     app.add_handler(MessageHandler(filters.Text("👤 سرویس‌های من"), my_services))
     app.add_handler(MessageHandler(filters.Text("📖 راهنمای اتصال"), connection_guide))
     app.add_handler(MessageHandler(filters.Text("👨‍💻 ارتباط با پشتیبانی"), support_contact))
+    app.add_handler(MessageHandler(filters.Text("📊 لیست همه سفارشات"), admin_all_orders))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#broadcast"), broadcast_message))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#search"), search_order))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#restore"), restore_db))
@@ -853,6 +963,7 @@ def build_telegram_app() -> Application:
     app.add_handler(CallbackQueryHandler(on_admin_enable, pattern=r"^adm_ena:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_disable, pattern=r"^adm_dis:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_delete, pattern=r"^adm_del:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_admin_orders_page, pattern=r"^adm_orders:\d+$"))
     app.add_handler(CallbackQueryHandler(on_unhandled_callback))
     
     # Schedule DB backup

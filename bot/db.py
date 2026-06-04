@@ -107,6 +107,21 @@ def get_all_users() -> list[int]:
         return [row[0] for row in rows]
 
 
+def get_all_orders_paginated(limit: int, offset: int) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM orders ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def count_all_orders() -> int:
+    with _conn() as c:
+        row = c.execute("SELECT COUNT(*) FROM orders").fetchone()
+        return row[0] if row else 0
+
+
 def search_order_by_uuid(uuid: str):
     with _conn() as c:
         row = c.execute("SELECT * FROM orders WHERE hiddify_uuid = ?", (uuid,)).fetchone()
