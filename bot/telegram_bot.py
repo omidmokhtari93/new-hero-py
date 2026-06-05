@@ -52,6 +52,7 @@ from bot.db import (
     search_order_by_uuid,
 )
 from bot.hiddify import (
+    check_server_status,
     create_user,
     delete_user,
     get_user,
@@ -108,14 +109,21 @@ def _plans_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _servers_keyboard(plan_index: int) -> InlineKeyboardMarkup:
+def _servers_keyboard(plan_index: int, server_statuses: dict[str, bool]) -> InlineKeyboardMarkup:
     rows = []
     for i, s in enumerate(SERVERS):
+        is_active = server_statuses.get(s.id, False)
+        status_text = "🟢 فعال" if is_active else "🔴 غیرفعال"
+        
+        # If inactive, we can still show it but maybe with a different callback or alert
+        # The user requested: "اگه غیرفعال بود نتونه انتخابش کنه"
+        callback_data = f"srv:{plan_index}:{i}" if is_active else "inactive_server"
+        
         rows.append(
             [
                 InlineKeyboardButton(
-                    s.title,
-                    callback_data=f"srv:{plan_index}:{i}",
+                    f"{s.title} ({status_text})",
+                    callback_data=callback_data,
                 )
             ]
         )
@@ -735,6 +743,19 @@ async def on_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await query.answer()
+    
+    # Show loading message
+    await query.edit_message_text(
+        f"💎 پلن انتخاب شده: {plan.title}\n"
+        "⏳ در حال بررسی وضعیت سرورها... لطفاً کمی صبر کنید."
+    )
+
+    # Check server statuses in parallel
+    async with httpx.AsyncClient(timeout=10) as client:
+        tasks = [check_server_status(s, client=client) for s in SERVERS]
+        results = await asyncio.gather(*tasks)
+        server_statuses = {s.id: res for s, res in zip(SERVERS, results)}
+
     log.info(
         "plan selected telegram_id=%s plan=%s — showing %d servers",
         query.from_user.id,
@@ -745,7 +766,7 @@ async def on_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"💎 پلن انتخاب شده: {plan.title}\n"
         f"💰 مبلغ: {plan.price_rial:,} ریال\n\n"
         f"📍 لطفاً لوکیشن (کشور) مورد نظر خود را برای خرید VPN انتخاب کنید:",
-        reply_markup=_servers_keyboard(plan_index),
+        reply_markup=_servers_keyboard(plan_index, server_statuses),
     )
 
 
@@ -927,6 +948,11 @@ async def on_admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.answer("❌ خطا در حذف از پنل", show_alert=True)
 
 
+async def on_inactive_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer("⚠️ این سرور در حال حاضر غیرفعال است. لطفاً سرور دیگری را انتخاب کنید.", show_alert=True)
+
+
 async def on_unhandled_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -958,6 +984,7 @@ def build_telegram_app() -> Application:
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#search"), search_order))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#restore"), restore_db))
     app.add_handler(CallbackQueryHandler(on_plan, pattern=r"^buy:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_inactive_server, pattern=r"^inactive_server$"))
     app.add_handler(CallbackQueryHandler(on_server, pattern=r"^srv:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_approve, pattern=r"^adm_app:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_cancel, pattern=r"^adm_can:\d+$"))

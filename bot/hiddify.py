@@ -139,3 +139,26 @@ async def delete_user(server: Server, user_uuid: str) -> bool:
         except httpx.HTTPError as e:
             log.error("hiddify delete user error server=%s uuid=%s: %s", server.id, user_uuid, e)
             return False
+
+
+async def check_server_status(server: Server, client: httpx.AsyncClient = None) -> bool:
+    """Check if the server API is reachable and responsive."""
+    if client is None:
+        async with httpx.AsyncClient(timeout=5) as new_client:
+            return await _check_server_req(server, new_client)
+    return await _check_server_req(server, client)
+
+
+async def _check_server_req(server: Server, client: httpx.AsyncClient) -> bool:
+    try:
+        # A simple request to check connectivity and auth
+        r = await client.get(
+            _admin_url(server, "/user/"), 
+            headers=_headers(server),
+            params={"limit": 1}
+        )
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        log.warning("Server status check failed for %s: %s", server.id, e)
+        return False
