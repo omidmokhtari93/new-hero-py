@@ -144,7 +144,7 @@ async def delete_user(server: Server, user_uuid: str) -> bool:
 async def check_server_status(server: Server, client: httpx.AsyncClient = None) -> bool:
     """Check if the server API is reachable and responsive."""
     if client is None:
-        async with httpx.AsyncClient(timeout=5) as new_client:
+        async with httpx.AsyncClient(timeout=3) as new_client:
             return await _check_server_req(server, new_client)
     return await _check_server_req(server, client)
 

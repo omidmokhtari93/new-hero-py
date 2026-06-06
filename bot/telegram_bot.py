@@ -751,7 +751,7 @@ async def on_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
     # Check server statuses in parallel
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=3) as client:
         tasks = [check_server_status(s, client=client) for s in SERVERS]
         results = await asyncio.gather(*tasks)
         server_statuses = {s.id: res for s, res in zip(SERVERS, results)}
