@@ -162,3 +162,18 @@ async def _check_server_req(server: Server, client: httpx.AsyncClient) -> bool:
     except Exception as e:
         log.warning("Server status check failed for %s: %s", server.id, e)
         return False
+
+
+async def get_system_stats(server: Server) -> dict:
+    """Get system statistics from Hiddify server."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.get(
+                _admin_url(server, "/server_status/"),
+                headers=_headers(server)
+            )
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            log.error("hiddify get system stats error server=%s: %s", server.id, e)
+            return {}

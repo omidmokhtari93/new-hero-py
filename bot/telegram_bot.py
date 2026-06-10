@@ -55,6 +55,7 @@ from bot.hiddify import (
     check_server_status,
     create_user,
     delete_user,
+    get_system_stats,
     get_user,
     subscription_url,
     update_user_status,
@@ -85,10 +86,19 @@ def _get_jalali_now() -> str:
     return _to_jalali(datetime.now(pytz.utc))
 
 
+def _format_size(num_bytes: int) -> str:
+    """Format bytes to human readable string."""
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if num_bytes < 1024:
+            return f"{num_bytes:.1f} {unit}"
+        num_bytes /= 1024
+    return f"{num_bytes:.1f} PB"
+
+
 def _main_keyboard(user_id: int = None) -> ReplyKeyboardMarkup:
     buttons = [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["👨‍💻 ارتباط با پشتیبانی"]]
     if user_id == ADMIN_CHAT_ID:
-        buttons.append(["📊 لیست همه سفارشات"])
+        buttons.append(["📊 لیست همه سفارشات", "📊 وضعیت سرورها"])
     return ReplyKeyboardMarkup(
         buttons,
         resize_keyboard=True,
@@ -364,6 +374,91 @@ async def admin_all_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if update.effective_user.id != ADMIN_CHAT_ID:
         return
     await _send_orders_page(update, 0)
+
+
+async def _generate_stats_text() -> str:
+    text = f"📊 <b>وضعیت لحظه‌ای سرورها</b>\n"
+    text += f"📅 به‌روزرسانی: <code>{_get_jalali_now()}</code>\n\n"
+    
+    for s in SERVERS:
+        data = await get_system_stats(s)
+        if not data:
+            text += f"📍 <b>{s.title}:</b>\n❌ عدم برقراری ارتباط با پنل\n\n"
+            continue
+            
+        try:
+            # Extract data based on the provided Hiddify JSON structure
+            sys_stats = data.get("stats", {}).get("system", {})
+            usage_hist = data.get("usage_history", {})
+            
+            total_users = usage_hist.get("total", {}).get("users", 0)
+            online_last5min = usage_hist.get("m5", {}).get("online", 0)
+            unique_ips = sys_stats.get("total_unique_ips", 0)
+            
+            cpu = sys_stats.get("cpu_percent", 0)
+            ram_used = sys_stats.get("ram_used", 0)
+            ram_total = sys_stats.get("ram_total", 1) # avoid div by zero
+            ram_percent = (ram_used / ram_total) * 100
+            
+            # Network traffic (current)
+            net_recv = sys_stats.get("bytes_recv", 0)
+            net_sent = sys_stats.get("bytes_sent", 0)
+            
+            total_traffic_gb = sys_stats.get("net_total_cumulative_GB", 0)
+            
+            # Today usage (convert bytes to GB)
+            today_usage_bytes = usage_hist.get("today", {}).get("usage", 0)
+            if isinstance(today_usage_bytes, str):
+                today_usage_bytes = int(today_usage_bytes)
+            today_traffic_gb = today_usage_bytes / (1024**3)
+            
+            text += (
+                f"📍 <b>{s.title}:</b>\n"
+                f"👥 کل کاربران: <code>{total_users}</code>\n"
+                f"🟢 آنلاین (5 دقیقه اخیر): <code>{online_last5min}</code>\n"
+                f"💻 پردازنده: <code>{cpu}%</code> | رم: <code>{ram_percent:.1f}%</code>\n"
+                f"📡 ترافیک زنده شبکه:\n"
+                f"   📥 ورودی: <code>{_format_size(net_recv)}/s</code>\n"
+                f"   📤 خروجی: <code>{_format_size(net_sent)}/s</code>\n"
+                f"📅 مصرف امروز: <code>{today_traffic_gb:.2f} GB</code>\n"
+                f"📊 کل ترافیک (Net): <code>{total_traffic_gb:.2f} GB</code>\n"
+                f"--------------------------\n"
+            )
+        except Exception as e:
+            log.error("Error parsing stats for server %s: %s", s.id, e)
+            text += f"📍 <b>{s.title}:</b>\n⚠️ خطا در پردازش داده‌ها\n\n"
+            
+    return text
+
+
+async def admin_server_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+    
+    msg = await update.message.reply_text("⏳ در حال دریافت آمار از سرورها...")
+    text = await _generate_stats_text()
+    
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 آپدیت", callback_data="adm_stats_ref")]])
+    await msg.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+async def on_admin_stats_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id != ADMIN_CHAT_ID:
+        return
+    
+    await query.answer("در حال به‌روزرسانی آمار...")
+    text = await _generate_stats_text()
+    
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 آپدیت", callback_data="adm_stats_ref")]])
+    # Only edit if text changed or to show it's refreshed
+    try:
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        if "Message is not modified" in str(e):
+            await query.answer("آمار تغییری نکرده است.")
+        else:
+            log.error("Error refreshing stats: %s", e)
 
 
 async def _send_orders_page(update: Update, page: int) -> None:
@@ -980,6 +1075,7 @@ def build_telegram_app() -> Application:
     app.add_handler(MessageHandler(filters.Text("📖 راهنمای اتصال"), connection_guide))
     app.add_handler(MessageHandler(filters.Text("👨‍💻 ارتباط با پشتیبانی"), support_contact))
     app.add_handler(MessageHandler(filters.Text("📊 لیست همه سفارشات"), admin_all_orders))
+    app.add_handler(MessageHandler(filters.Text("📊 وضعیت سرورها"), admin_server_stats))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#broadcast"), broadcast_message))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#search"), search_order))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#restore"), restore_db))
@@ -992,6 +1088,7 @@ def build_telegram_app() -> Application:
     app.add_handler(CallbackQueryHandler(on_admin_disable, pattern=r"^adm_dis:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_delete, pattern=r"^adm_del:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_orders_page, pattern=r"^adm_orders:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_admin_stats_refresh, pattern=r"^adm_stats_ref$"))
     app.add_handler(CallbackQueryHandler(on_unhandled_callback))
     
     # Schedule DB backup
