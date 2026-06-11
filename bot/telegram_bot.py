@@ -51,6 +51,7 @@ from bot.db import (
     mark_failed,
     search_order_by_uuid,
     update_order_plan,
+    upsert_user,
 )
 from bot.hiddify import (
     check_server_status,
@@ -175,6 +176,15 @@ async def _rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def _log_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if user:
+        # Update user's last_active_at
+        upsert_user(
+            telegram_id=user.id,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            username=user.username
+        )
     if update.callback_query:
         q = update.callback_query
         log.info(
@@ -266,6 +276,14 @@ async def _request_admin_approval(
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log.info("/start from telegram_id=%s username=%s", user.id, user.username)
+    
+    # Save or update user data
+    upsert_user(
+        telegram_id=user.id,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        username=user.username
+    )
     
     welcome_text = (
         f"🚀 <b>به ربات {BOT_NAME} خوش آمدید!</b>\n\n"
@@ -667,6 +685,79 @@ async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"✔️ موفق: {count}\n"
         f"❌ ناموفق: {failed}"
     )
+
+
+async def update_users_from_json(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+
+    if not update.message.document:
+        await update.message.reply_text("⚠️ لطفاً فایل JSON حاوی chat_id ها را ارسال کنید.")
+        return
+
+    status_msg = await update.message.reply_text("⏳ در حال پردازش فایل و به‌روزرسانی کاربران...")
+
+    try:
+        # Download the file
+        file = await context.bot.get_file(update.message.document.file_id)
+        file_content = await file.download_as_bytearray()
+
+        # Parse JSON
+        import json
+        chat_ids = json.loads(file_content.decode('utf-8'))
+
+        if not isinstance(chat_ids, list):
+            await status_msg.edit_text("❌ فرمت فایل صحیح نیست. لطفاً یک آرایه از chat_id ها ارسال کنید.")
+            return
+
+        total = len(chat_ids)
+        success_count = 0
+        failed_count = 0
+
+        log.info(f"Starting to update {total} users from JSON file")
+
+        for index, chat_id in enumerate(chat_ids):
+            try:
+                # Fetch user info from Telegram
+                user = await context.bot.get_chat(chat_id)
+
+                # Save user to database
+                upsert_user(
+                    telegram_id=user.id,
+                    first_name=user.first_name,
+                    last_name=user.last_name,
+                    username=user.username
+                )
+
+                success_count += 1
+                log.debug(f"Processed user {index+1}/{total}: {chat_id}")
+
+                # Update status every 10 users
+                if (index + 1) % 10 == 0:
+                    await status_msg.edit_text(
+                        f"⏳ در حال پردازش...\n"
+                        f"📊 پیشرفت: {index+1}/{total}\n"
+                        f"✔️ موفق: {success_count}\n"
+                        f"❌ ناموفق: {failed_count}"
+                    )
+
+            except Exception as e:
+                failed_count += 1
+                log.error(f"Failed to process user {chat_id}: {e}")
+
+        # Final status update
+        await status_msg.edit_text(
+            f"✅ به‌روزرسانی کاربران به پایان رسید.\n\n"
+            f"📊 آمار نهایی:\n"
+            f"👥 کل: {total}\n"
+            f"✔️ موفق: {success_count}\n"
+            f"❌ ناموفق: {failed_count}"
+        )
+        log.info(f"User update completed: total={total}, success={success_count}, failed={failed_count}")
+
+    except Exception as e:
+        log.exception(f"Failed to process update users: {e}")
+        await status_msg.edit_text(f"❌ خطا در پردازش فایل: {e}")
 
 
 async def _refresh_search_message(query, order_id: int) -> None:
@@ -1282,6 +1373,7 @@ def build_telegram_app() -> Application:
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#broadcast"), broadcast_message))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#search"), search_order))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#restore"), restore_db))
+    app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#update_users"), update_users_from_json))
     app.add_handler(CallbackQueryHandler(on_plan, pattern=r"^buy:\d+$"))
     app.add_handler(CallbackQueryHandler(on_inactive_server, pattern=r"^inactive_server$"))
     app.add_handler(CallbackQueryHandler(on_server, pattern=r"^srv:\d+:\d+$"))

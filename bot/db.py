@@ -27,6 +27,18 @@ def init_db() -> None:
             )
             """
         )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                telegram_id INTEGER PRIMARY KEY,
+                first_name TEXT,
+                last_name TEXT,
+                username TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                last_active_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
         cols = {row[1] for row in c.execute("PRAGMA table_info(orders)")}
         if "server_id" not in cols:
             c.execute(
@@ -135,3 +147,47 @@ def search_order_by_uuid(uuid: str):
     with _conn() as c:
         row = c.execute("SELECT * FROM orders WHERE hiddify_uuid = ?", (uuid,)).fetchone()
         return dict(row) if row else None
+
+
+def upsert_user(telegram_id: int, first_name: str, last_name: str = None, username: str = None) -> None:
+    with _conn() as c:
+        # First check if user exists
+        existing_user = c.execute("SELECT telegram_id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+        if existing_user:
+            # Update existing user's info and last_active_at
+            c.execute(
+                """
+                UPDATE users 
+                SET first_name = ?, last_name = ?, username = ?, last_active_at = datetime('now') 
+                WHERE telegram_id = ?
+                """,
+                (first_name, last_name, username, telegram_id),
+            )
+            log.info("user updated telegram_id=%s", telegram_id)
+        else:
+            # Insert new user
+            c.execute(
+                """
+                INSERT INTO users (telegram_id, first_name, last_name, username) 
+                VALUES (?, ?, ?, ?)
+                """,
+                (telegram_id, first_name, last_name, username),
+            )
+            log.info("user created telegram_id=%s", telegram_id)
+
+
+def get_all_users() -> list[int]:
+    with _conn() as c:
+        # Get all users from users table
+        users_from_users = c.execute("SELECT telegram_id FROM users").fetchall()
+        # Get all unique users from orders table
+        users_from_orders = c.execute("SELECT DISTINCT telegram_id FROM orders").fetchall()
+        
+        # Combine both lists and get unique ids
+        all_user_ids = set()
+        for row in users_from_users:
+            all_user_ids.add(row[0])
+        for row in users_from_orders:
+            all_user_ids.add(row[0])
+            
+        return list(all_user_ids)
