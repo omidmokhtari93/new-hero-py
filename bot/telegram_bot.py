@@ -415,7 +415,7 @@ async def _generate_stats_text() -> str:
             text += (
                 f"📍 <b>{s.title}:</b>\n"
                 f"👥 کل کاربران: <code>{total_users}</code>\n"
-                f"🟢 آنلاین (5 دقیقه اخیر): <code>{online_last5min}</code>\n"
+                f"🟢 آنلاین: <code>{online_last5min}</code>\n"
                 f"💻 پردازنده: <code>{cpu}%</code> | رم: <code>{ram_percent:.1f}%</code>\n"
                 f"📡 ترافیک زنده شبکه:\n"
                 f"   📥 ورودی: <code>{_format_size(net_recv)}/s</code>\n"
