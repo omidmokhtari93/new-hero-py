@@ -95,6 +95,21 @@ def _format_size(num_bytes: int) -> str:
     return f"{num_bytes:.1f} PB"
 
 
+def _create_progress_bar(used: float, total: float) -> str:
+    """Create a progress bar with emojis."""
+    if total == 0:
+        return "⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪"
+    
+    percentage = (used / total) * 100
+    num_filled = int(percentage / 10)
+    num_empty = 10 - num_filled
+    
+    filled = "🟢" * num_filled
+    empty = "⚪" * num_empty
+    
+    return f"{filled}{empty} ({percentage:.0f}%)"
+
+
 def _main_keyboard(user_id: int = None) -> ReplyKeyboardMarkup:
     buttons = [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["👨‍💻 ارتباط با پشتیبانی"]]
     if user_id == ADMIN_CHAT_ID:
@@ -513,8 +528,12 @@ async def _send_orders_page(update: Update, page: int) -> None:
                 if rem_days is None:
                     rem_days = h_user.get("package_days", "نامحدود")
                 
+                progress_bar = _create_progress_bar(usage_gb, limit_gb)
+                
                 usage_info = (
-                    f"📊 مصرف: <code>{usage_gb:.2f}/{limit_gb}</code> گیگ | ⏳ <code>{rem_days}</code> روز\n"
+                    f"📊 مصرف: <code>{usage_gb:.2f}/{limit_gb}</code> گیگ\n"
+                    f"   {progress_bar}\n"
+                    f"⏳ زمان باقی‌مانده: <code>{rem_days}</code> روز\n"
                 )
 
         try:
