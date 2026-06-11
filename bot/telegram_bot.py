@@ -306,23 +306,37 @@ async def support_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def connection_guide(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     guide_text = (
         "📖 <b>راهنمای اتصال به سرویس‌ها</b>\n\n"
-        "برای استفاده از سرویس‌های ما، ابتدا باید لینک اشتراک (Subscription URL) خود را از بخش «سرویس‌های من» کپی کنید.\n\n"
-        "📱 <b>اندروید و iOS (نرم‌افزار V2Box):</b>\n"
-        "۱. نرم‌افزار <b>V2Box</b> را از اپ‌استور یا گوگل‌پلی نصب کنید.\n"
-        "۲. وارد برنامه شده و به بخش <b>Configs</b> بروید.\n"
-        "۳. روی علامت <b>+</b> در بالای صفحه بزنید.\n"
-        "۴. گزینه <b>Add Subscription</b> یا <b>Import v2ray link from clipboard</b> را انتخاب کنید.\n"
-        "۵. لینک اشتراک خود را وارد کرده و یک نام دلخواه بگذارید.\n"
-        "۶. در نهایت دکمه <b>Update Subscriptions</b> را بزنید و به سرور متصل شوید.\n\n"
-        "💻 <b>ویندوز (نرم‌افزار v2rayN):</b>\n"
-        "۱. نرم‌افزار <b>v2rayN</b> را دانلود و اجرا کنید.\n"
-        "۲. به بخش <b>Subscription Group</b> بروید.\n"
-        "۳. گزینه <b>Add</b> را بزنید و در قسمت URL، لینک اشتراک خود را وارد کنید.\n"
-        "۴. روی دکمه <b>Update subscription</b> بزنید تا لیست سرورها ظاهر شود.\n"
-        "۵. یک سرور را انتخاب کرده و دکمه <b>Enter</b> را بزنید تا متصل شوید.\n\n"
-        "⚠️ در صورت بروز هرگونه مشکل، با پشتیبانی در ارتباط باشید."
+        "برای استفاده از سرویس‌های ما از نرم‌افزار رسمی <b>Hiddify</b> استفاده کنید.\n\n"
+        "🔑 <b>مرحله ۱ — دریافت لینک اشتراک</b>\n"
+        "۱. در ربات روی «👤 سرویس‌های من» بزنید.\n"
+        "۲. <b>لینک اشتراک (Subscription URL)</b> سرویس خود را کپی کنید.\n\n"
+        "📥 <b>مرحله ۲ — دانلود Hiddify</b>\n"
+        "🤖 <b>اندروید:</b>\n"
+        "• <a href=\"https://play.google.com/store/apps/details?id=app.hiddify.com\">Google Play</a>\n"
+        "• <a href=\"https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Android-universal.apk\">دانلود مستقیم APK</a>\n\n"
+        "🍎 <b>iOS:</b>\n"
+        "• <a href=\"https://apps.apple.com/app/hiddify-proxy-vpn/id6596777532\">App Store</a>\n\n"
+        "💻 <b>ویندوز:</b>\n"
+        "• <a href=\"https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Windows-Setup-x64.exe\">دانلود نصب‌کننده</a>\n"
+        "• <a href=\"https://github.com/hiddify/hiddify-app/releases\">صفحه دانلود GitHub</a>\n\n"
+        "📲 <b>مرحله ۳ — افزودن پروفایل</b>\n"
+        "۱. برنامه Hiddify را باز کنید.\n"
+        "۲. در صفحه <b>Home</b> روی دکمه <b>+</b> (بالا سمت چپ) بزنید.\n"
+        "۳. یکی از این روش‌ها را انتخاب کنید:\n"
+        "   • <b>Add from clipboard</b> — اگر لینک را کپی کرده‌اید\n"
+        "   • <b>Add manually</b> — نام دلخواه بگذارید و لینک را در فیلد URL وارد کنید\n"
+        "۴. روی <b>Save</b> بزنید.\n\n"
+        "🔌 <b>مرحله ۴ — اتصال</b>\n"
+        "۱. به صفحه <b>Home</b> برگردید.\n"
+        "۲. دکمه اتصال وسط صفحه را بزنید تا سبز شود.\n"
+        "۳. برای به‌روزرسانی سرورها، دکمه بروزرسانی پروفایل را بزنید.\n"
+        "۴. در منوی <b>Proxies</b> می‌توانید سرور دلخواه را انتخاب کنید.\n\n"
+        "💡 <b>نکته:</b> اگر لینک اشتراک را در مرورگر باز کنید، گزینه «Tap to Start» پروفایل را مستقیم در Hiddify اضافه می‌کند.\n\n"
+        "⚠️ در صورت بروز مشکل، با پشتیبانی در ارتباط باشید."
     )
-    await update.message.reply_text(guide_text, parse_mode="HTML")
+    await update.message.reply_text(
+        guide_text, parse_mode="HTML", disable_web_page_preview=True
+    )
 
 
 async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
