@@ -141,6 +141,32 @@ async def delete_user(server: Server, user_uuid: str) -> bool:
             return False
 
 
+async def update_user_plan(server: Server, user_uuid: str, plan: Plan) -> bool:
+    """Update user's plan to a new one, resetting usage and duration."""
+    payload = {
+        "current_usage_GB": 0,
+        "package_days": plan.days,
+        "start_date": date.today().isoformat(),
+        "usage_limit_GB": plan.gb if plan.gb > 0 else 9000,
+    }
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.patch(
+                _admin_url(server, f"/user/{user_uuid}/"),
+                headers=_headers(server),
+                json=payload
+            )
+            r.raise_for_status()
+            log.info("hiddify user plan updated server=%s uuid=%s plan=%s", server.id, user_uuid, plan.id)
+            return True
+        except httpx.HTTPError as e:
+            log.error("hiddify update user plan error server=%s uuid=%s: %s", server.id, user_uuid, e)
+            if hasattr(e, 'response') and e.response:
+                log.error("hiddify error response: %s", e.response.text)
+            return False
+
+
 async def check_server_status(server: Server, client: httpx.AsyncClient = None) -> bool:
     """Check if the server API is reachable and responsive."""
     if client is None:

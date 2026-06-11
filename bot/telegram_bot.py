@@ -50,6 +50,7 @@ from bot.db import (
     mark_paid,
     mark_failed,
     search_order_by_uuid,
+    update_order_plan,
 )
 from bot.hiddify import (
     check_server_status,
@@ -58,6 +59,7 @@ from bot.hiddify import (
     get_system_stats,
     get_user,
     subscription_url,
+    update_user_plan,
     update_user_status,
 )
 
@@ -743,7 +745,10 @@ async def _refresh_search_message(query, order_id: int) -> None:
             ],
             [
                 InlineKeyboardButton("🗑️ حذف کامل سرویس", callback_data=f"adm_del:{order['id']}"),
-            ]
+            ],
+            [
+                InlineKeyboardButton("🔄 تمدید سرویس", callback_data=f"adm_renew_menu:{order['id']}"),
+            ],
         ]
     )
 
@@ -833,7 +838,10 @@ async def search_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             ],
             [
                 InlineKeyboardButton("🗑️ حذف کامل سرویس", callback_data=f"adm_del:{order['id']}"),
-            ]
+            ],
+            [
+                InlineKeyboardButton("🔄 تمدید سرویس", callback_data=f"adm_renew_menu:{order['id']}"),
+            ],
         ]
     )
 
@@ -1122,6 +1130,122 @@ async def on_admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.answer("❌ خطا در حذف از پنل", show_alert=True)
 
 
+async def on_admin_renew_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    order_id = int(query.data.split(":")[1])
+    order = get_order(order_id)
+    if not order:
+        await query.answer("سفارش یافت نشد.", show_alert=True)
+        return
+
+    server = SERVERS_BY_ID.get(order["server_id"])
+    if not server:
+        await query.answer("سرور یافت نشد.", show_alert=True)
+        return
+
+    # Check if server is active
+    server_is_active = await check_server_status(server)
+    if not server_is_active:
+        await query.answer("⚠️ سرور مربوطه غیرفعال است.", show_alert=True)
+        return
+
+    # Create keyboard with plan options
+    keyboard_rows = []
+    for i, plan in enumerate(PLANS):
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    f"💎 {plan.title} - {plan.price_rial:,} ریال",
+                    callback_data=f"adm_renew:{order_id}:{i}"
+                )
+            ]
+        )
+    # Add back button
+    keyboard_rows.append(
+        [InlineKeyboardButton("⬅️ بازگشت", callback_data=f"adm_back:{order_id}")]
+    )
+
+    reply_markup = InlineKeyboardMarkup(keyboard_rows)
+
+    text = (
+        f"🔄 <b>تمدید سرویس</b>\n\n"
+        f"📦 شماره سفارش: <code>{order_id}</code>\n"
+        f"🌍 لوکیشن: {server.title}\n\n"
+        f"لطفاً پلن جدید را انتخاب کنید:"
+    )
+
+    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
+
+
+async def on_admin_renew(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    try:
+        _, order_id_s, plan_index_s = query.data.split(":", 2)
+        order_id = int(order_id_s)
+        plan_index = int(plan_index_s)
+    except (ValueError, IndexError):
+        await query.answer("انتخاب نامعتبر.", show_alert=True)
+        return
+
+    order = get_order(order_id)
+    if not order:
+        await query.answer("سفارش یافت نشد.", show_alert=True)
+        return
+
+    server = SERVERS_BY_ID.get(order["server_id"])
+    if not server:
+        await query.answer("سرور یافت نشد.", show_alert=True)
+        return
+
+    plan = PLANS[plan_index]
+    if not plan:
+        await query.answer("پلن یافت نشد.", show_alert=True)
+        return
+
+    await query.answer("در حال تمدید...")
+
+    # Update the user's plan on Hiddify
+    ok = await update_user_plan(server, order["hiddify_uuid"], plan)
+
+    if ok:
+        # Update the order record in the database
+        update_order_plan(order_id, plan.id, plan.price_rial)
+        
+        # Notify the user
+        sub_url = subscription_url(server, order["hiddify_uuid"], label=f"HeroVPN - {server.title}")
+        try:
+            await context.bot.send_message(
+                chat_id=order["telegram_id"],
+                text=f"✅ سرویس شما با موفقیت تمدید شد!\n\n"
+                     f"💎 پلن جدید: {plan.title}\n"
+                     f"🔗 لینک اشتراک:\n<code>{sub_url}</code>",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            log.error("Failed to send renewal notification to user %s: %s", order["telegram_id"], e)
+        
+        # Refresh and show the updated service info
+        await _refresh_search_message(query, order_id)
+        await query.answer("✅ سرویس با موفقیت تمدید شد.", show_alert=True)
+    else:
+        await query.answer("❌ خطا در تمدید سرویس.", show_alert=True)
+
+
+async def on_admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    order_id = int(query.data.split(":")[1])
+    await _refresh_search_message(query, order_id)
+
+
 async def on_inactive_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer("⚠️ این سرور در حال حاضر غیرفعال است. لطفاً سرور دیگری را انتخاب کنید.", show_alert=True)
@@ -1166,6 +1290,9 @@ def build_telegram_app() -> Application:
     app.add_handler(CallbackQueryHandler(on_admin_enable, pattern=r"^adm_ena:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_disable, pattern=r"^adm_dis:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_delete, pattern=r"^adm_del:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_admin_renew_menu, pattern=r"^adm_renew_menu:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_admin_renew, pattern=r"^adm_renew:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_admin_back, pattern=r"^adm_back:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_orders_page, pattern=r"^adm_orders:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_stats_refresh, pattern=r"^adm_stats_ref$"))
     app.add_handler(CallbackQueryHandler(on_unhandled_callback))

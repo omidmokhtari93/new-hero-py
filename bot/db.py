@@ -92,6 +92,15 @@ def mark_failed(order_id: int) -> None:
     log.warning("order %s marked failed", order_id)
 
 
+def update_order_plan(order_id: int, plan_id: str, amount_rial: int) -> None:
+    with _conn() as c:
+        c.execute(
+            "UPDATE orders SET plan_id = ?, amount_rial = ? WHERE id = ?",
+            (plan_id, amount_rial, order_id),
+        )
+    log.info("order %s updated plan=%s amount=%s", order_id, plan_id, amount_rial)
+
+
 def get_user_orders(telegram_id: int, limit: int = 5) -> list[dict]:
     with _conn() as c:
         rows = c.execute(
