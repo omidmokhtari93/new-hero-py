@@ -355,11 +355,23 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             usage_gb = h_user.get("current_usage_GB", 0)
             limit_gb = h_user.get("usage_limit_GB", 0)
             
-            # Robust extraction of remaining days
+            # Calculate remaining days
             rem_days = h_user.get("remaining_days")
-            if rem_days is None:
-                # Fallback to package_days if countdown hasn't started
-                rem_days = h_user.get("package_days", "نامحدود")
+            if rem_days is None or not isinstance(rem_days, (int, float)):
+                # Try to calculate manually from start_date and package_days
+                start_date_str = h_user.get("start_date")
+                package_days = h_user.get("package_days", 0)
+                if start_date_str and package_days:
+                    try:
+                        start_date = datetime.fromisoformat(start_date_str)
+                        today = datetime.now(pytz.utc).date()
+                        days_passed = (today - start_date.date()).days
+                        rem_days = max(package_days - days_passed, 0)
+                    except Exception as e:
+                        log.warning(f"Failed to calculate remaining days: {e}")
+                        rem_days = package_days  # Fallback to package days
+                else:
+                    rem_days = package_days or "نامحدود"
             
             usage_text = (
                 f"📊 مصرف: <code>{usage_gb:.2f}</code> از <code>{limit_gb}</code> گیگ\n"
@@ -524,9 +536,24 @@ async def _send_orders_page(update: Update, page: int) -> None:
             if h_user:
                 usage_gb = h_user.get("current_usage_GB", 0)
                 limit_gb = h_user.get("usage_limit_GB", 0)
+                
+                # Calculate remaining days
                 rem_days = h_user.get("remaining_days")
-                if rem_days is None:
-                    rem_days = h_user.get("package_days", "نامحدود")
+                if rem_days is None or not isinstance(rem_days, (int, float)):
+                    # Try to calculate manually from start_date and package_days
+                    start_date_str = h_user.get("start_date")
+                    package_days = h_user.get("package_days", 0)
+                    if start_date_str and package_days:
+                        try:
+                            start_date = datetime.fromisoformat(start_date_str)
+                            today = datetime.now(pytz.utc).date()
+                            days_passed = (today - start_date.date()).days
+                            rem_days = max(package_days - days_passed, 0)
+                        except Exception as e:
+                            log.warning(f"Failed to calculate remaining days: {e}")
+                            rem_days = package_days  # Fallback to package days
+                    else:
+                        rem_days = package_days or "نامحدود"
                 
                 progress_bar = _create_progress_bar(usage_gb, limit_gb)
                 
@@ -639,11 +666,23 @@ async def _refresh_search_message(query, order_id: int) -> None:
         usage_gb = h_user.get("current_usage_GB", 0)
         limit_gb = h_user.get("usage_limit_GB", 0)
         
-        # Robust extraction of remaining days
+        # Calculate remaining days
         rem_days = h_user.get("remaining_days")
-        if rem_days is None:
-            # Fallback to package_days if countdown hasn't started
-            rem_days = h_user.get("package_days", "نامحدود")
+        if rem_days is None or not isinstance(rem_days, (int, float)):
+            # Try to calculate manually from start_date and package_days
+            start_date_str = h_user.get("start_date")
+            package_days = h_user.get("package_days", 0)
+            if start_date_str and package_days:
+                try:
+                    start_date = datetime.fromisoformat(start_date_str)
+                    today = datetime.now(pytz.utc).date()
+                    days_passed = (today - start_date.date()).days
+                    rem_days = max(package_days - days_passed, 0)
+                except Exception as e:
+                    log.warning(f"Failed to calculate remaining days: {e}")
+                    rem_days = package_days  # Fallback to package days
+            else:
+                rem_days = package_days or "نامحدود"
 
         is_enabled = h_user.get("enable", True)
         
