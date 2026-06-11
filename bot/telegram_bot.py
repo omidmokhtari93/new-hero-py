@@ -95,17 +95,21 @@ def _format_size(num_bytes: int) -> str:
     return f"{num_bytes:.1f} PB"
 
 
-def _create_progress_bar(used: float, total: float) -> str:
+def _create_progress_bar(used: float, total: float, square: bool = False) -> str:
     """Create a progress bar with emojis."""
     if total == 0:
-        return "⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪"
+        return "⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜" if square else "⚪⚪⚪⚪⚪⚪⚪⚪⚪⚪"
     
     percentage = (used / total) * 100
     num_filled = int(percentage / 10)
     num_empty = 10 - num_filled
     
-    filled = "🟢" * num_filled
-    empty = "⚪" * num_empty
+    if square:
+        filled = "🟩" * num_filled
+        empty = "⬜" * num_empty
+    else:
+        filled = "🟢" * num_filled
+        empty = "⚪" * num_empty
     
     return f"{filled}{empty} ({percentage:.0f}%)"
 
@@ -373,8 +377,11 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 else:
                     rem_days = package_days or "نامحدود"
             
+            progress_bar = _create_progress_bar(usage_gb, limit_gb, square=True)
+            
             usage_text = (
                 f"📊 مصرف: <code>{usage_gb:.2f}</code> از <code>{limit_gb}</code> گیگ\n"
+                f"   {progress_bar}\n"
                 f"⏳ زمان باقی‌مانده: <code>{rem_days}</code> روز\n"
             )
 
@@ -555,7 +562,7 @@ async def _send_orders_page(update: Update, page: int) -> None:
                     else:
                         rem_days = package_days or "نامحدود"
                 
-                progress_bar = _create_progress_bar(usage_gb, limit_gb)
+                progress_bar = _create_progress_bar(usage_gb, limit_gb, square=True)
                 
                 usage_info = (
                     f"📊 مصرف: <code>{usage_gb:.2f}/{limit_gb}</code> گیگ\n"
