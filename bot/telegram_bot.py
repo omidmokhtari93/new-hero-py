@@ -48,6 +48,8 @@ from bot.db import (
     get_order,
     get_db_user,
     get_user_orders,
+    count_user_orders,
+    count_user_active_orders,
     mark_paid,
     mark_failed,
     search_order_by_uuid,
@@ -120,7 +122,7 @@ def _create_progress_bar(used: float, total: float, square: bool = False) -> str
 
 
 def _main_keyboard(user_id: int = None) -> ReplyKeyboardMarkup:
-    buttons = [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["👨‍💻 ارتباط با پشتیبانی"]]
+    buttons = [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["� اطلاعات اکانت"], ["��‍💻 ارتباط با پشتیبانی"]]
     if user_id == ADMIN_CHAT_ID:
         buttons.append(["📊 لیست همه سفارشات", "📊 وضعیت سرورها"])
         buttons.append(["➕ ایجاد سفارش"])
@@ -433,6 +435,50 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
 
     await msg.edit_text(text, parse_mode="HTML")
+
+
+async def account_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    db_user = get_db_user(user.id)
+    
+    if not db_user:
+        await update.message.reply_text(
+            "⚠️ اطلاعات شما در دیتابیس یافت نشد. لطفاً دوباره /start بزنید."
+        )
+        return
+    
+    # Calculate join date
+    try:
+        dt = datetime.strptime(db_user["created_at"], "%Y-%m-%d %H:%M:%S")
+        jalali_join_date = _to_jalali(dt)
+    except Exception:
+        jalali_join_date = db_user["created_at"]
+    
+    # Get order statistics
+    total_orders = count_user_orders(user.id)
+    active_orders = count_user_active_orders(user.id)
+    
+    # Build user info
+    full_name = " ".join([db_user["first_name"], db_user["last_name"] if db_user["last_name"] else ""])
+    username = f"@{db_user['username']}" if db_user["username"] else "—"
+    
+    text = (
+        f"👤 <b>اطلاعات اکانت شما:</b>\n\n"
+        f"🆔 <b>شماره چت (Chat ID):</b>\n"
+        f"<code>{user.id}</code>\n\n"
+        f"👨‍🦱 <b>نام و نام خانوادگی:</b>\n"
+        f"{full_name}\n\n"
+        f"🔖 <b>نام کاربری:</b>\n"
+        f"{username}\n\n"
+        f"📅 <b>تاریخ عضویت:</b>\n"
+        f"{jalali_join_date}\n\n"
+        f"📦 <b>تعداد کل سفارشات:</b>\n"
+        f"{total_orders}\n\n"
+        f"✅ <b>تعداد سرویس‌های فعال:</b>\n"
+        f"{active_orders}"
+    )
+    
+    await update.message.reply_text(text, parse_mode="HTML")
 
 
 async def admin_create_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1563,7 +1609,8 @@ def build_telegram_app() -> Application:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Text("🛍️ خرید سرویس جدید"), buy_service))
     app.add_handler(MessageHandler(filters.Text("👤 سرویس‌های من"), my_services))
-    app.add_handler(MessageHandler(filters.Text("📖 راهنمای اتصال"), connection_guide))
+    app.add_handler(MessageHandler(filters.Text("� اطلاعات اکانت"), account_info))
+    app.add_handler(MessageHandler(filters.Text("�📖 راهنمای اتصال"), connection_guide))
     app.add_handler(MessageHandler(filters.Text("👨‍💻 ارتباط با پشتیبانی"), support_contact))
     app.add_handler(MessageHandler(filters.Text("📊 لیست همه سفارشات"), admin_all_orders))
     app.add_handler(MessageHandler(filters.Text("📊 وضعیت سرورها"), admin_server_stats))
