@@ -223,7 +223,7 @@ async def _request_admin_approval(
 
     # Message to user
     order_details = (
-        f"سلام پشتیبان عزیز، قصد پرداخت این سفارش را دارم:\n\n"
+        f"قصد پرداخت این سفارش را دارم:\n\n"
         f"📦 شماره سفارش: {order_id}\n"
         f"💎 پلن: {plan.title}\n"
         f"🌍 لوکیشن: {server.title}\n"
