@@ -89,6 +89,26 @@ def get_order(order_id: int):
         return dict(row) if row else None
 
 
+def get_db_user(telegram_id: int):
+    with _conn() as c:
+        row = c.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def search_users(query: str) -> list[dict]:
+    with _conn() as c:
+        # Search by first_name, last_name, username, or telegram_id
+        rows = c.execute(
+            """
+            SELECT * FROM users 
+            WHERE first_name LIKE ? OR last_name LIKE ? OR username LIKE ? OR telegram_id LIKE ?
+            LIMIT 10
+            """,
+            (f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%")
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def mark_paid(order_id: int, hiddify_uuid: str) -> None:
     with _conn() as c:
         c.execute(

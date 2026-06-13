@@ -46,10 +46,12 @@ from bot.db import (
     get_all_orders_paginated,
     get_all_users,
     get_order,
+    get_db_user,
     get_user_orders,
     mark_paid,
     mark_failed,
     search_order_by_uuid,
+    search_users,
     update_order_plan,
     upsert_user,
 )
@@ -121,6 +123,7 @@ def _main_keyboard(user_id: int = None) -> ReplyKeyboardMarkup:
     buttons = [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["👨‍💻 ارتباط با پشتیبانی"]]
     if user_id == ADMIN_CHAT_ID:
         buttons.append(["📊 لیست همه سفارشات", "📊 وضعیت سرورها"])
+        buttons.append(["➕ ایجاد سفارش"])
     return ReplyKeyboardMarkup(
         buttons,
         resize_keyboard=True,
@@ -436,6 +439,47 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
 
     await msg.edit_text(text, parse_mode="HTML")
+
+
+async def admin_create_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+    
+    await update.message.reply_text(
+        "👤 لطفاً نام، نام کاربری یا آیدی عددی کاربر را وارد کنید:"
+    )
+    
+    # Set the state for this admin
+    context.user_data["admin_state"] = "create_order_search_user"
+
+
+async def admin_search_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+    
+    state = context.user_data.get("admin_state")
+    if state != "create_order_search_user":
+        return
+    
+    search_query = update.message.text.strip()
+    users = search_users(search_query)
+    
+    if not users:
+        await update.message.reply_text("❌ کاربری با این مشخصات یافت نشد.")
+        context.user_data.pop("admin_state", None)
+        return
+    
+    # Show keyboard with users
+    keyboard_rows = []
+    for user in users:
+        full_name = " ".join([user["first_name"], user["last_name"] if user["last_name"] else ""])
+        username = f"@{user['username']}" if user["username"] else ""
+        button_text = f"{full_name} {username}"
+        keyboard_rows.append([InlineKeyboardButton(button_text, callback_data=f"adm_create_order_user:{user['telegram_id']}")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard_rows)
+    await update.message.reply_text("👥 لطفاً کاربر مورد نظر را انتخاب کنید:", reply_markup=reply_markup)
+    context.user_data.pop("admin_state", None)
 
 
 async def admin_all_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1337,6 +1381,158 @@ async def on_admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _refresh_search_message(query, order_id)
 
 
+async def on_admin_create_order_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    try:
+        telegram_id = int(query.data.split(":")[1])
+    except (ValueError, IndexError):
+        await query.answer("انتخاب نامعتبر.", show_alert=True)
+        return
+
+    user = get_db_user(telegram_id)
+    if not user:
+        await query.answer("کاربر یافت نشد.", show_alert=True)
+        return
+
+    # Store the user in context
+    context.user_data["create_order_user"] = telegram_id
+
+    # Show plan selection
+    keyboard_rows = []
+    for i, plan in enumerate(PLANS):
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    f"💎 {plan.title} - {plan.price_rial:,} ریال",
+                    callback_data=f"adm_create_order_plan:{telegram_id}:{i}"
+                )
+            ]
+        )
+
+    reply_markup = InlineKeyboardMarkup(keyboard_rows)
+    await query.edit_message_text(
+        "💎 لطفاً پلن مورد نظر را انتخاب کنید:",
+        reply_markup=reply_markup
+    )
+
+
+async def on_admin_create_order_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    try:
+        _, telegram_id_s, plan_index_s = query.data.split(":", 2)
+        telegram_id = int(telegram_id_s)
+        plan_index = int(plan_index_s)
+    except (ValueError, IndexError):
+        await query.answer("انتخاب نامعتبر.", show_alert=True)
+        return
+
+    plan = PLANS[plan_index]
+    if not plan:
+        await query.answer("پلن یافت نشد.", show_alert=True)
+        return
+
+    # Store plan in context
+    context.user_data["create_order_plan"] = plan_index
+
+    # Show loading message
+    await query.edit_message_text(
+        "⏳ در حال بررسی وضعیت سرورها..."
+    )
+
+    # Check server statuses in parallel
+    async with httpx.AsyncClient(timeout=3) as client:
+        tasks = [check_server_status(s, client=client) for s in SERVERS]
+        results = await asyncio.gather(*tasks)
+        server_statuses = {s.id: res for s, res in zip(SERVERS, results)}
+
+    # Show server selection
+    keyboard_rows = []
+    for i, server in enumerate(SERVERS):
+        is_active = server_statuses.get(server.id, False)
+        status_text = "🟢 فعال" if is_active else "🔴 غیرفعال"
+        if is_active:
+            keyboard_rows.append(
+                [
+                    InlineKeyboardButton(
+                        f"🌍 {server.title} ({status_text})",
+                        callback_data=f"adm_create_order_server:{telegram_id}:{plan_index}:{i}"
+                    )
+                ]
+            )
+
+    reply_markup = InlineKeyboardMarkup(keyboard_rows)
+    await query.edit_message_text(
+        "🌍 لطفاً سرور مورد نظر را انتخاب کنید:",
+        reply_markup=reply_markup
+    )
+
+
+async def on_admin_create_order_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id != ADMIN_CHAT_ID:
+        return
+
+    try:
+        _, telegram_id_s, plan_index_s, server_index_s = query.data.split(":", 3)
+        telegram_id = int(telegram_id_s)
+        plan_index = int(plan_index_s)
+        server_index = int(server_index_s)
+    except (ValueError, IndexError):
+        await query.answer("انتخاب نامعتبر.", show_alert=True)
+        return
+
+    plan = PLANS[plan_index]
+    server = SERVERS[server_index]
+
+    await query.answer("در حال ایجاد سرویس...")
+    await query.edit_message_text("⏳ در حال ایجاد سرویس...")
+
+    try:
+        # Create user on Hiddify
+        user_data = await create_user(server, telegram_id, plan)
+        hiddify_uuid = user_data["uuid"]
+
+        # Create order in DB
+        order_id = create_order(telegram_id, plan.id, server.id, plan.price_rial)
+        mark_paid(order_id, hiddify_uuid)
+
+        # Generate subscription link
+        sub_url = subscription_url(server, hiddify_uuid, label=f"HeroVPN - {server.title}")
+
+        # Notify user
+        await context.bot.send_message(
+            chat_id=telegram_id,
+            text=f"✅ سرویس جدید برای شما فعال شد!\n\n"
+                 f"💎 پلن: {plan.title}\n"
+                 f"🌍 لوکیشن: {server.title}\n"
+                 f"🔗 لینک اشتراک:\n<code>{sub_url}</code>",
+            parse_mode="HTML",
+        )
+
+        # Show success message to admin
+        await query.edit_message_text(
+            f"✅ سرویس با موفقیت ایجاد شد!\n\n"
+            f"📦 شماره سفارش: <code>{order_id}</code>\n"
+            f"👤 آیدی کاربر: <code>{telegram_id}</code>\n"
+            f"💎 پلن: {plan.title}\n"
+            f"🌍 لوکیشن: {server.title}\n"
+            f"🔗 لینک اشتراک:\n<code>{sub_url}</code>",
+            parse_mode="HTML"
+        )
+
+        log.info(f"Admin created order {order_id} for user {telegram_id}")
+
+    except Exception as e:
+        log.error(f"Failed to create order for user {telegram_id}: {e}")
+        await query.edit_message_text(f"❌ خطا در ایجاد سرویس: {e}")
+
+
 async def on_inactive_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer("⚠️ این سرور در حال حاضر غیرفعال است. لطفاً سرور دیگری را انتخاب کنید.", show_alert=True)
@@ -1370,6 +1566,8 @@ def build_telegram_app() -> Application:
     app.add_handler(MessageHandler(filters.Text("👨‍💻 ارتباط با پشتیبانی"), support_contact))
     app.add_handler(MessageHandler(filters.Text("📊 لیست همه سفارشات"), admin_all_orders))
     app.add_handler(MessageHandler(filters.Text("📊 وضعیت سرورها"), admin_server_stats))
+    app.add_handler(MessageHandler(filters.Text("➕ ایجاد سفارش"), admin_create_order))
+    app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID), admin_search_user_handler))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#broadcast"), broadcast_message))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#search"), search_order))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#restore"), restore_db))
@@ -1385,6 +1583,9 @@ def build_telegram_app() -> Application:
     app.add_handler(CallbackQueryHandler(on_admin_renew_menu, pattern=r"^adm_renew_menu:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_renew, pattern=r"^adm_renew:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_back, pattern=r"^adm_back:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_admin_create_order_user, pattern=r"^adm_create_order_user:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_admin_create_order_plan, pattern=r"^adm_create_order_plan:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_admin_create_order_server, pattern=r"^adm_create_order_server:\d+:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_orders_page, pattern=r"^adm_orders:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_stats_refresh, pattern=r"^adm_stats_ref$"))
     app.add_handler(CallbackQueryHandler(on_unhandled_callback))
