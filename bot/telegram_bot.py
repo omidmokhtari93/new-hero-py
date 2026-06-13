@@ -122,7 +122,7 @@ def _create_progress_bar(used: float, total: float, square: bool = False) -> str
 
 
 def _main_keyboard(user_id: int = None) -> ReplyKeyboardMarkup:
-    buttons = [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["👤 اطلاعات اکانت"], ["‍💻 ارتباط با پشتیبانی"]]
+    buttons = [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["👤 اطلاعات اکانت"], ["‍👨‍💻 ارتباط با پشتیبانی"]]
     if user_id == ADMIN_CHAT_ID:
         buttons.append(["📊 لیست همه سفارشات", "📊 وضعیت سرورها"])
         buttons.append(["➕ ایجاد سفارش"])
