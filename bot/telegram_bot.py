@@ -952,11 +952,18 @@ async def search_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     user_info = f"👤 کاربر: {order['telegram_id']}"
     
+    # Get plan title
+    plan_title = order['plan_id']
+    for plan in PLANS:
+        if plan.id == order['plan_id']:
+            plan_title = plan.title
+            break
+    
     text = (
         f"🔍 <b>اطلاعات سرویس یافت شده:</b>\n\n"
         f"📦 شماره سفارش: <code>{order['id']}</code>\n"
         f"🆔 آیدی کاربر: <code>{order['telegram_id']}</code>\n"
-        f"💎 پلن: {order['plan_id']}\n"
+        f"💎 پلن: {plan_title}\n"
         f"🌍 لوکیشن: {server.title}\n"
         f"📅 تاریخ فعال‌سازی: <code>{jalali_date}</code>\n"
         f"{usage_info}"
@@ -1567,11 +1574,11 @@ def build_telegram_app() -> Application:
     app.add_handler(MessageHandler(filters.Text("📊 لیست همه سفارشات"), admin_all_orders))
     app.add_handler(MessageHandler(filters.Text("📊 وضعیت سرورها"), admin_server_stats))
     app.add_handler(MessageHandler(filters.Text("➕ ایجاد سفارش"), admin_create_order))
-    app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID), admin_search_user_handler))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#broadcast"), broadcast_message))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#search"), search_order))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#restore"), restore_db))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#update_users"), update_users_from_json))
+    app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID), admin_search_user_handler))
     app.add_handler(CallbackQueryHandler(on_plan, pattern=r"^buy:\d+$"))
     app.add_handler(CallbackQueryHandler(on_inactive_server, pattern=r"^inactive_server$"))
     app.add_handler(CallbackQueryHandler(on_server, pattern=r"^srv:\d+:\d+$"))
