@@ -203,3 +203,27 @@ async def get_system_stats(server: Server) -> dict:
         except Exception as e:
             log.error("hiddify get system stats error server=%s: %s", server.id, e)
             return {}
+
+
+async def count_enabled_users(server: Server) -> int:
+    """Count enabled users on the Hiddify server."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            # Get all users (use large limit to get all)
+            r = await client.get(
+                _admin_url(server, "/user/"),
+                headers=_headers(server),
+                params={"limit": 10000}
+            )
+            r.raise_for_status()
+            users = r.json()
+            
+            # Count enabled users
+            enabled_count = 0
+            for user in users:
+                if user.get("enable", False):
+                    enabled_count += 1
+            return enabled_count
+        except Exception as e:
+            log.error("hiddify count enabled users error server=%s: %s", server.id, e)
+            return 0

@@ -63,6 +63,7 @@ from bot.hiddify import (
     delete_user,
     get_system_stats,
     get_user,
+    count_enabled_users,
     subscription_url,
     update_user_plan,
     update_user_status,
@@ -532,53 +533,59 @@ async def _generate_stats_text() -> str:
     text = f"📊 <b>وضعیت لحظه‌ای سرورها</b>\n"
     text += f"📅 به‌روزرسانی: <code>{_get_jalali_now()}</code>\n\n"
     
-    for s in SERVERS:
-        data = await get_system_stats(s)
-        if not data:
-            text += f"📍 <b>{s.title}:</b>\n❌ عدم برقراری ارتباط با پنل\n\n"
-            continue
-            
-        try:
-            # Extract data based on the provided Hiddify JSON structure
-            sys_stats = data.get("stats", {}).get("system", {})
-            usage_hist = data.get("usage_history", {})
-            
-            total_users = usage_hist.get("total", {}).get("users", 0)
-            online_last5min = usage_hist.get("m5", {}).get("online", 0)
-            unique_ips = sys_stats.get("total_unique_ips", 0)
-            
-            cpu = sys_stats.get("cpu_percent", 0)
-            ram_used = sys_stats.get("ram_used", 0)
-            ram_total = sys_stats.get("ram_total", 1) # avoid div by zero
-            ram_percent = (ram_used / ram_total) * 100
-            
-            # Network traffic (current)
-            net_recv = sys_stats.get("bytes_recv", 0)
-            net_sent = sys_stats.get("bytes_sent", 0)
-            
-            total_traffic_gb = sys_stats.get("net_total_cumulative_GB", 0)
-            
-            # Today usage (convert bytes to GB)
-            today_usage_bytes = usage_hist.get("today", {}).get("usage", 0)
-            if isinstance(today_usage_bytes, str):
-                today_usage_bytes = int(today_usage_bytes)
-            today_traffic_gb = today_usage_bytes / (1024**3)
-            
-            text += (
-                f"📍 <b>{s.title}:</b>\n"
-                f"👥 کل کاربران: <code>{total_users}</code>\n"
-                f"🟢 آنلاین: <code>{online_last5min}</code>\n"
-                f"💻 پردازنده: <code>{cpu}%</code> | رم: <code>{ram_percent:.1f}%</code>\n"
-                f"📡 ترافیک زنده شبکه:\n"
-                f"   📥 ورودی: <code>{_format_size(net_recv)}/s</code>\n"
-                f"   📤 خروجی: <code>{_format_size(net_sent)}/s</code>\n"
-                f"📅 مصرف امروز: <code>{today_traffic_gb:.2f} GB</code>\n"
-                f"📊 کل ترافیک (Net): <code>{total_traffic_gb:.2f} GB</code>\n"
-                f"--------------------------\n"
-            )
-        except Exception as e:
-            log.error("Error parsing stats for server %s: %s", s.id, e)
-            text += f"📍 <b>{s.title}:</b>\n⚠️ خطا در پردازش داده‌ها\n\n"
+    # Get system stats and enabled user counts in parallel
+    async with httpx.AsyncClient(timeout=10) as client:
+        stats_tasks = [get_system_stats(s) for s in SERVERS]
+        enabled_tasks = [count_enabled_users(s) for s in SERVERS]
+        stats_results = await asyncio.gather(*stats_tasks)
+        enabled_results = await asyncio.gather(*enabled_tasks)
+        
+        for s, data, enabled_count in zip(SERVERS, stats_results, enabled_results):
+            if not data:
+                text += f"📍 <b>{s.title}:</b>\n❌ عدم برقراری ارتباط با پنل\n\n"
+                continue
+                
+            try:
+                # Extract data based on the provided Hiddify JSON structure
+                sys_stats = data.get("stats", {}).get("system", {})
+                usage_hist = data.get("usage_history", {})
+                
+                total_users = usage_hist.get("total", {}).get("users", 0)
+                online_last5min = usage_hist.get("m5", {}).get("online", 0)
+                unique_ips = sys_stats.get("total_unique_ips", 0)
+                
+                cpu = sys_stats.get("cpu_percent", 0)
+                ram_used = sys_stats.get("ram_used", 0)
+                ram_total = sys_stats.get("ram_total", 1) # avoid div by zero
+                ram_percent = (ram_used / ram_total) * 100
+                
+                # Network traffic (current)
+                net_recv = sys_stats.get("bytes_recv", 0)
+                net_sent = sys_stats.get("bytes_sent", 0)
+                
+                total_traffic_gb = sys_stats.get("net_total_cumulative_GB", 0)
+                
+                # Today usage (convert bytes to GB)
+                today_usage_bytes = usage_hist.get("today", {}).get("usage", 0)
+                if isinstance(today_usage_bytes, str):
+                    today_usage_bytes = int(today_usage_bytes)
+                today_traffic_gb = today_usage_bytes / (1024**3)
+                
+                text += (
+                    f"📍 <b>{s.title}:</b>\n"
+                    f"👥 کاربران فعال: <code>{enabled_count}</code>\n"
+                    f"🟢 آنلاین: <code>{online_last5min}</code>\n"
+                    f"💻 پردازنده: <code>{cpu}%</code> | رم: <code>{ram_percent:.1f}%</code>\n"
+                    f"📡 ترافیک زنده شبکه:\n"
+                    f"   📥 ورودی: <code>{_format_size(net_recv)}/s</code>\n"
+                    f"   📤 خروجی: <code>{_format_size(net_sent)}/s</code>\n"
+                    f"📅 مصرف امروز: <code>{today_traffic_gb:.2f} GB</code>\n"
+                    f"📊 کل ترافیک (Net): <code>{total_traffic_gb:.2f} GB</code>\n"
+                    f"--------------------------\n"
+                )
+            except Exception as e:
+                log.error("Error parsing stats for server %s: %s", s.id, e)
+                text += f"📍 <b>{s.title}:</b>\n⚠️ خطا در پردازش داده‌ها\n\n"
             
     return text
 
