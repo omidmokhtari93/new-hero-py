@@ -441,20 +441,11 @@ async def account_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = update.effective_user
     db_user = get_db_user(user.id)
     
-    # If user not in DB, try to save them first
     if not db_user:
-        upsert_user(
-            telegram_id=user.id,
-            first_name=user.first_name,
-            last_name=user.last_name,
-            username=user.username
+        await update.message.reply_text(
+            "⚠️ اطلاعات شما در دیتابیس یافت نشد. لطفاً دوباره /start بزنید."
         )
-        db_user = get_db_user(user.id)
-        if not db_user:
-            await update.message.reply_text(
-                "⚠️ اطلاعات شما در دیتابیس یافت نشد. لطفاً دوباره /start بزنید."
-            )
-            return
+        return
     
     # Calculate join date
     try:
