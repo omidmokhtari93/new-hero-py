@@ -79,6 +79,16 @@ _last_backup_time = 0
 
 TEHRAN_TZ = pytz.timezone("Asia/Tehran")
 
+# Button texts (centralized for easy modification)
+BTN_BUY_SERVICE = "🛍️ خرید سرویس جدید"
+BTN_MY_SERVICES = "👤 سرویس‌های من"
+BTN_CONNECTION_GUIDE = "📖 راهنمای اتصال"
+BTN_ACCOUNT_INFO = "👤 اطلاعات اکانت"
+BTN_SUPPORT = "👨‍💻 ارتباط با پشتیبانی"
+BTN_ALL_ORDERS = "📊 لیست همه سفارشات"
+BTN_SERVER_STATS = "📊 وضعیت سرورها"
+BTN_CREATE_ORDER = "➕ ایجاد سفارش"
+
 
 def _to_jalali(dt: datetime) -> str:
     """Convert a datetime object to Jalali string."""
@@ -122,10 +132,10 @@ def _create_progress_bar(used: float, total: float, square: bool = False) -> str
 
 
 def _main_keyboard(user_id: int = None) -> ReplyKeyboardMarkup:
-    buttons = [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["👤 اطلاعات اکانت"], ["👨‍💻 ارتباط با پشتیبانی"]]
+    buttons = [[BTN_BUY_SERVICE], [BTN_MY_SERVICES, BTN_CONNECTION_GUIDE], [BTN_ACCOUNT_INFO], [BTN_SUPPORT]]
     if user_id == ADMIN_CHAT_ID:
-        buttons.append(["📊 لیست همه سفارشات", "📊 وضعیت سرورها"])
-        buttons.append(["➕ ایجاد سفارش"])
+        buttons.append([BTN_ALL_ORDERS, BTN_SERVER_STATS])
+        buttons.append([BTN_CREATE_ORDER])
     return ReplyKeyboardMarkup(
         buttons,
         resize_keyboard=True,
@@ -479,6 +489,87 @@ async def account_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
     
     await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def forward_user_message_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Ignore messages from admin, commands, and button texts
+    if update.effective_user.id == ADMIN_CHAT_ID:
+        return
+    if update.message.text and update.message.text.startswith('/'):
+        return
+    
+    button_texts = [
+        BTN_BUY_SERVICE,
+        BTN_MY_SERVICES,
+        BTN_CONNECTION_GUIDE,
+        BTN_SUPPORT,
+        BTN_ACCOUNT_INFO,
+        BTN_ALL_ORDERS,
+        BTN_SERVER_STATS,
+        BTN_CREATE_ORDER
+    ]
+    if update.message.text and update.message.text in button_texts:
+        return
+    
+    # Get user info
+    user = update.effective_user
+    user_text = update.message.text or "📎 پیام رسانه‌ای"
+    
+    # Prepare message to admin
+    admin_message_text = (
+        f"👤 پیام جدید از کاربر:\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📛 نام: {user.first_name} {user.last_name or ''}\n"
+        f"🔖 نام کاربری: @{user.username if user.username else '—'}\n"
+        f"🆔 Chat ID: #{user.id}#\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"✉️ پیام کاربر:\n"
+        f"{user_text}"
+    )
+    
+    # Send to admin
+    await context.bot.send_message(
+        chat_id=ADMIN_CHAT_ID,
+        text=admin_message_text,
+        parse_mode="HTML"
+    )
+    
+    # Confirm to user
+    await update.message.reply_text("✅ پیام شما به پشتیبانی ارسال شد.")
+
+
+async def reply_from_admin_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Check if it's admin replying to a message
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+    if not update.message.reply_to_message:
+        return
+    
+    # Extract chat_id from the replied message text
+    replied_text = update.message.reply_to_message.text
+    if not replied_text:
+        return
+    
+    # Find the chat_id in the replied message (look for #CHAT_ID# format)
+    import re
+    match = re.search(r"#(\d+)#", replied_text)
+    if not match:
+        await update.message.reply_text("⚠️ این پیام به هیچ کاربری مرتبط نیست.")
+        return
+    
+    user_telegram_id = int(match.group(1))
+    
+    # Send reply to user
+    try:
+        await context.bot.copy_message(
+            chat_id=user_telegram_id,
+            from_chat_id=update.effective_chat.id,
+            message_id=update.message.message_id
+        )
+        await update.message.reply_text("✅ پاسخ شما به کاربر ارسال شد.")
+    except Exception as e:
+        log.error(f"Failed to send reply to user {user_telegram_id}: {e}")
+        await update.message.reply_text(f"❌ خطا در ارسال پاسخ به کاربر: {e}")
 
 
 async def admin_create_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1607,19 +1698,22 @@ def build_telegram_app() -> Application:
     app.add_handler(TypeHandler(Update, _log_update), group=-1)
     
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Text("🛍️ خرید سرویس جدید"), buy_service))
-    app.add_handler(MessageHandler(filters.Text("👤 سرویس‌های من"), my_services))
-    app.add_handler(MessageHandler(filters.Text("👤 اطلاعات اکانت"), account_info))
-    app.add_handler(MessageHandler(filters.Text("📖 راهنمای اتصال"), connection_guide))
-    app.add_handler(MessageHandler(filters.Text("👨‍💻 ارتباط با پشتیبانی"), support_contact))
-    app.add_handler(MessageHandler(filters.Text("📊 لیست همه سفارشات"), admin_all_orders))
-    app.add_handler(MessageHandler(filters.Text("📊 وضعیت سرورها"), admin_server_stats))
-    app.add_handler(MessageHandler(filters.Text("➕ ایجاد سفارش"), admin_create_order))
+    app.add_handler(MessageHandler(filters.Text(BTN_BUY_SERVICE), buy_service))
+    app.add_handler(MessageHandler(filters.Text(BTN_MY_SERVICES), my_services))
+    app.add_handler(MessageHandler(filters.Text(BTN_ACCOUNT_INFO), account_info))
+    app.add_handler(MessageHandler(filters.Text(BTN_CONNECTION_GUIDE), connection_guide))
+    app.add_handler(MessageHandler(filters.Text(BTN_SUPPORT), support_contact))
+    app.add_handler(MessageHandler(filters.Text(BTN_ALL_ORDERS), admin_all_orders))
+    app.add_handler(MessageHandler(filters.Text(BTN_SERVER_STATS), admin_server_stats))
+    app.add_handler(MessageHandler(filters.Text(BTN_CREATE_ORDER), admin_create_order))
+    # Admin reply handler must come BEFORE admin_search_user_handler
+    app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.REPLY, reply_from_admin_to_user))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#broadcast"), broadcast_message))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#search"), search_order))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#restore"), restore_db))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#update_users"), update_users_from_json))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID), admin_search_user_handler))
+    app.add_handler(MessageHandler(filters.ALL, forward_user_message_to_admin))
     app.add_handler(CallbackQueryHandler(on_plan, pattern=r"^buy:\d+$"))
     app.add_handler(CallbackQueryHandler(on_inactive_server, pattern=r"^inactive_server$"))
     app.add_handler(CallbackQueryHandler(on_server, pattern=r"^srv:\d+:\d+$"))
