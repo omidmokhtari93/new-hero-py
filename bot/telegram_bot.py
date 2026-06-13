@@ -122,7 +122,7 @@ def _create_progress_bar(used: float, total: float, square: bool = False) -> str
 
 
 def _main_keyboard(user_id: int = None) -> ReplyKeyboardMarkup:
-    buttons = [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["👤 اطلاعات اکانت"], ["‍💻 ارتباط با پشتیبانی"]]
+    buttons = [["🛍️ خرید سرویس جدید"], ["👤 سرویس‌های من", "📖 راهنمای اتصال"], ["� اطلاعات اکانت"], ["��‍💻 ارتباط با پشتیبانی"]]
     if user_id == ADMIN_CHAT_ID:
         buttons.append(["📊 لیست همه سفارشات", "📊 وضعیت سرورها"])
         buttons.append(["➕ ایجاد سفارش"])
@@ -1609,8 +1609,8 @@ def build_telegram_app() -> Application:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Text("🛍️ خرید سرویس جدید"), buy_service))
     app.add_handler(MessageHandler(filters.Text("👤 سرویس‌های من"), my_services))
-    app.add_handler(MessageHandler(filters.Text("� اطلاعات اکانت"), account_info))
-    app.add_handler(MessageHandler(filters.Text("�📖 راهنمای اتصال"), connection_guide))
+    app.add_handler(MessageHandler(filters.Text("👤 اطلاعات اکانت"), account_info))
+    app.add_handler(MessageHandler(filters.Text("📖 راهنمای اتصال"), connection_guide))
     app.add_handler(MessageHandler(filters.Text("👨‍💻 ارتباط با پشتیبانی"), support_contact))
     app.add_handler(MessageHandler(filters.Text("📊 لیست همه سفارشات"), admin_all_orders))
     app.add_handler(MessageHandler(filters.Text("📊 وضعیت سرورها"), admin_server_stats))
