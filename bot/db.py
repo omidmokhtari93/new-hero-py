@@ -133,13 +133,31 @@ def update_order_plan(order_id: int, plan_id: str, amount_rial: int) -> None:
     log.info("order %s updated plan=%s amount=%s", order_id, plan_id, amount_rial)
 
 
-def get_user_orders(telegram_id: int, limit: int = 5) -> list[dict]:
+def get_user_orders(telegram_id: int, limit: int = 10) -> list[dict]:
     with _conn() as c:
         rows = c.execute(
-            "SELECT * FROM orders WHERE telegram_id = ? AND status = 'paid' ORDER BY created_at DESC LIMIT ?",
+            "SELECT * FROM orders WHERE telegram_id = ? ORDER BY id DESC LIMIT ?",
             (telegram_id, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def count_user_orders(telegram_id: int) -> int:
+    with _conn() as c:
+        result = c.execute(
+            "SELECT COUNT(*) FROM orders WHERE telegram_id = ?",
+            (telegram_id,),
+        ).fetchone()
+        return result[0] if result else 0
+
+
+def count_user_active_orders(telegram_id: int) -> int:
+    with _conn() as c:
+        result = c.execute(
+            "SELECT COUNT(*) FROM orders WHERE telegram_id = ? AND status = 'paid'",
+            (telegram_id,),
+        ).fetchone()
+        return result[0] if result else 0
 
 
 def get_all_users() -> list[int]:
