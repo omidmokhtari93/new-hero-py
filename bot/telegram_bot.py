@@ -13,6 +13,8 @@ from urllib.parse import quote
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
     ReplyKeyboardMarkup,
     Update,
 )
@@ -20,8 +22,10 @@ from telegram.ext import (
     Application,
     ApplicationHandlerStop,
     CallbackQueryHandler,
+    ChosenInlineResultHandler,
     CommandHandler,
     ContextTypes,
+    InlineQueryHandler,
     MessageHandler,
     TypeHandler,
     filters,
@@ -1535,9 +1539,54 @@ async def on_admin_create_order_user(update: Update, context: ContextTypes.DEFAU
         await query.answer("کاربر یافت نشد.", show_alert=True)
         return
 
+    # Get user's orders
+    user_orders = get_user_orders(telegram_id, limit=20)
+    
+    # Prepare text and keyboard
+    text = f"👤 کاربر انتخابی:\n"
+    text += f"نام: {user['first_name']} {user['last_name'] or ''}\n"
+    text += f"نام کاربری: @{user['username'] or '—'}\n"
+    text += f"🆔: <code>{telegram_id}</code>\n"
+    text += "━━━━━━━━━━━━━━━━━━━━\n"
+    text += "لطفاً یک گزینه‌ای را انتخاب کنید:\n\n"
+    
+    keyboard_rows = [
+        [InlineKeyboardButton("➕ ثبت سفارش جدید", callback_data=f"adm_new_order_for_user:{telegram_id}")]
+    ]
+    
+    if user_orders:
+        text += "📋 سفارشات قبلی کاربر:\n"
+        for order in user_orders:
+            server = SERVERS_BY_ID.get(order["server_id"], None)
+            plan_title = "نامشخص"
+            for p in PLANS:
+                if p.id == order["plan_id"]:
+                    plan_title = p.title
+                    break
+            status_emoji = "✅" if order["status"] == "paid" else "⏳" if order["status"] == "pending" else "❌"
+            text += f"\n{status_emoji} سفارش #{order['id']} - {plan_title} - {server.title if server else 'نامشخص'}"
+            keyboard_rows.append([InlineKeyboardButton(f"🔄 تمدید سفارش #{order['id']}", callback_data=f"adm_renew_menu:{order['id']}")])
+    else:
+        text += "📭 سفارش قبلی‌ای برای این کاربر وجود ندارد."
+    
+    reply_markup = InlineKeyboardMarkup(keyboard_rows)
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=reply_markup)
+
+
+async def on_admin_new_order_for_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query.from_user.id != ADMIN_CHAT_ID:
+        return
+    
+    try:
+        telegram_id = int(query.data.split(":")[1])
+    except (ValueError, IndexError):
+        await query.answer("انتخاب نامعتبر.", show_alert=True)
+        return
+    
     # Store the user in context
     context.user_data["create_order_user"] = telegram_id
-
+    
     # Show plan selection
     keyboard_rows = []
     for i, plan in enumerate(PLANS):
@@ -1549,7 +1598,7 @@ async def on_admin_create_order_user(update: Update, context: ContextTypes.DEFAU
                 )
             ]
         )
-
+    
     reply_markup = InlineKeyboardMarkup(keyboard_rows)
     await query.edit_message_text(
         "💎 لطفاً پلن مورد نظر را انتخاب کنید:",
@@ -1726,11 +1775,15 @@ def build_telegram_app() -> Application:
     app.add_handler(CallbackQueryHandler(on_admin_renew, pattern=r"^adm_renew:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_back, pattern=r"^adm_back:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_create_order_user, pattern=r"^adm_create_order_user:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_admin_new_order_for_user, pattern=r"^adm_new_order_for_user:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_create_order_plan, pattern=r"^adm_create_order_plan:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_create_order_server, pattern=r"^adm_create_order_server:\d+:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_orders_page, pattern=r"^adm_orders:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_stats_refresh, pattern=r"^adm_stats_ref$"))
     app.add_handler(CallbackQueryHandler(on_unhandled_callback))
+    # Inline query handlers
+    app.add_handler(InlineQueryHandler(inline_query_handler))
+    app.add_handler(ChosenInlineResultHandler(chosen_inline_result_handler))
     
     # Schedule DB backup
     job_queue = app.job_queue
@@ -1749,3 +1802,117 @@ def build_telegram_app() -> Application:
 
     log.info("telegram handlers registered: start, plan, server, fallback")
     return app
+
+
+async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Only allow admin
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+
+    query = update.inline_query.query.strip()
+    if not query:
+        # Show empty or placeholder
+        await update.inline_query.answer([], cache_time=1)
+        return
+
+    users = search_users(query)
+    results = []
+
+    for user in users:
+        user_id = user["telegram_id"]
+        full_name = " ".join([user["first_name"], user["last_name"] if user["last_name"] else ""])
+        username = f"@{user['username']}" if user["username"] else ""
+        description = f"{username} | {user_id}"
+
+        result = InlineQueryResultArticle(
+            id=str(user_id),
+            title=full_name,
+            description=description,
+            input_message_content=InputTextMessageContent(
+                f"کاربر انتخاب شد:\n"
+                f"نام: {full_name}\n"
+                f"آیدی: {user_id}\n"
+                f"{username}"
+            ),
+        )
+        results.append(result)
+
+    if not results:
+        results.append(InlineQueryResultArticle(
+            id="0",
+            title="کاربری یافت نشد!",
+            description="نام، نام کاربری یا آیدی دیگری را امتحان کنید.",
+            input_message_content=InputTextMessageContent("کاربری یافت نشد!"),
+        ))
+
+    await update.inline_query.answer(results, cache_time=1, is_personal=True)
+
+
+async def chosen_inline_result_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Only allow admin
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+
+    chosen_result = update.chosen_inline_result
+    user_id = chosen_result.result_id
+
+    if not user_id or user_id == "0":
+        return
+
+    try:
+        telegram_id = int(user_id)
+    except ValueError:
+        return
+
+    # Instead of editing the inline message, we send a new message to admin
+    # We need to send it directly to admin chat
+    try:
+        # Create a fake update object to re-use on_admin_create_order_user logic
+        user = get_db_user(telegram_id)
+        if not user:
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text="❌ کاربر یافت نشد."
+            )
+            return
+
+        # Get user's orders
+        user_orders = get_user_orders(telegram_id, limit=20)
+        
+        # Prepare text and keyboard
+        text = f"👤 کاربر انتخابی:\n"
+        text += f"نام: {user['first_name']} {user['last_name'] or ''}\n"
+        text += f"نام کاربری: @{user['username'] or '—'}\n"
+        text += f"🆔: <code>{telegram_id}</code>\n"
+        text += "━━━━━━━━━━━━━━━━━━━━\n"
+        text += "لطفاً یک گزینه‌ای را انتخاب کنید:\n\n"
+        
+        keyboard_rows = [
+            [InlineKeyboardButton("➕ ثبت سفارش جدید", callback_data=f"adm_new_order_for_user:{telegram_id}")]
+        ]
+        
+        if user_orders:
+            text += "📋 سفارشات قبلی کاربر:\n"
+            for order in user_orders:
+                server = SERVERS_BY_ID.get(order["server_id"], None)
+                plan_title = "نامشخص"
+                for p in PLANS:
+                    if p.id == order["plan_id"]:
+                        plan_title = p.title
+                        break
+                status_emoji = "✅" if order["status"] == "paid" else "⏳" if order["status"] == "pending" else "❌"
+                text += f"\n{status_emoji} سفارش #{order['id']} - {plan_title} - {server.title if server else 'نامشخص'}"
+                keyboard_rows.append([InlineKeyboardButton(f"🔄 تمدید سفارش #{order['id']}", callback_data=f"adm_renew_menu:{order['id']}")])
+        else:
+            text += "📭 سفارش قبلی‌ای برای این کاربر وجود ندارد."
+        
+        reply_markup = InlineKeyboardMarkup(keyboard_rows)
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
+
+    except Exception as e:
+        log.error(f"Error in chosen_inline_result: {e}")
