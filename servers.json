@@ -8,11 +8,11 @@
     "user_path": "2vlhk39OKwqdFz3gKdgViLu0Hwubv5"
   },
   {
-    "id": "us1",
-    "title": "🇺🇸 آمریکا",
-    "base_url": "https://us1.omidmokhtari93.workers.dev",
-    "admin_path": "XUUBu5i2w22dcVW0gXoeeW",
-    "api_key": "2c5e6043-b974-400c-832f-1cce73619f64",
-    "user_path": "XtKaNmiaOv5wGosZHItMvy7vi5pA"
+    "id": "singapore",
+    "title": "🇸🇳 سنگاپور",
+    "base_url": "https://sing.omidmokhtari93.workers.dev",
+    "admin_path": "TaziTtyIbCa4ZhnZs3Wr0AsH",
+    "api_key": "568b353d-1b2e-4a18-9a90-8eaec0533824",
+    "user_path": "brguUOTBBRv"
   }
 ]
