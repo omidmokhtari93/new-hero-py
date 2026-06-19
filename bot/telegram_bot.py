@@ -47,6 +47,7 @@ from bot.config import (
 from bot.db import (
     count_all_orders,
     create_order,
+    delete_order,
     get_all_orders_paginated,
     get_all_users,
     get_order,
@@ -133,6 +134,106 @@ def _create_progress_bar(used: float, total: float, square: bool = False) -> str
         empty = "⚪" * num_empty
     
     return f"{filled}{empty} ({percentage:.0f}%)"
+
+
+def _calc_remaining_days(h_user: dict):
+    rem_days = h_user.get("remaining_days")
+    if rem_days is None or not isinstance(rem_days, (int, float)):
+        start_date_str = h_user.get("start_date")
+        package_days = h_user.get("package_days", 0)
+        if start_date_str and package_days:
+            try:
+                start_date = datetime.fromisoformat(start_date_str)
+                today = datetime.now(pytz.utc).date()
+                days_passed = (today - start_date.date()).days
+                rem_days = max(package_days - days_passed, 0)
+            except Exception as e:
+                log.warning("Failed to calculate remaining days: %s", e)
+                rem_days = package_days
+        else:
+            rem_days = package_days or "نامحدود"
+    return rem_days
+
+
+def _format_active_service_usage(h_user: dict | None) -> str:
+    if not h_user:
+        return "   ⚠️ آمار در دسترس نیست\n"
+
+    usage_gb = h_user.get("current_usage_GB", 0)
+    limit_gb = h_user.get("usage_limit_GB", 0)
+    rem_days = _calc_remaining_days(h_user)
+    progress_bar = _create_progress_bar(usage_gb, limit_gb, square=True)
+
+    return (
+        f"   📊 مصرف: <code>{usage_gb:.2f}</code> از <code>{limit_gb}</code> گیگ\n"
+        f"   {progress_bar}\n"
+        f"   ⏳ زمان باقی‌مانده: <code>{rem_days}</code> روز\n"
+    )
+
+
+async def _fetch_hiddify_for_orders(orders: list[dict]) -> dict[int, dict]:
+    paid_orders = [
+        o for o in orders
+        if o["status"] == "paid"
+        and o.get("hiddify_uuid")
+        and SERVERS_BY_ID.get(o["server_id"])
+    ]
+    if not paid_orders:
+        return {}
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        tasks = [
+            get_user(SERVERS_BY_ID[o["server_id"]], o["hiddify_uuid"], client=client)
+            for o in paid_orders
+        ]
+        results = await asyncio.gather(*tasks)
+
+    return {o["id"]: h_user for o, h_user in zip(paid_orders, results)}
+
+
+async def _build_admin_user_panel(telegram_id: int) -> tuple[str | None, InlineKeyboardMarkup | None]:
+    user = get_db_user(telegram_id)
+    if not user:
+        return None, None
+
+    user_orders = get_user_orders(telegram_id, limit=20)
+    h_users_map = await _fetch_hiddify_for_orders(user_orders)
+
+    text = (
+        f"👤 <b>کاربر انتخابی:</b>\n"
+        f"نام: {user['first_name']} {user['last_name'] or ''}\n"
+        f"نام کاربری: @{user['username'] or '—'}\n"
+        f"🆔: <code>{telegram_id}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"لطفاً یک گزینه را انتخاب کنید:\n\n"
+    )
+
+    keyboard_rows = [
+        [InlineKeyboardButton("➕ ثبت سفارش جدید", callback_data=f"adm_new_order_for_user:{telegram_id}")]
+    ]
+
+    if user_orders:
+        text += "📋 سفارشات کاربر:\n"
+        for order in user_orders:
+            server = SERVERS_BY_ID.get(order["server_id"])
+            plan_title = next((p.title for p in PLANS if p.id == order["plan_id"]), "نامشخص")
+            status_emoji = "✅" if order["status"] == "paid" else "⏳" if order["status"] == "pending" else "❌"
+            text += (
+                f"\n{status_emoji} سفارش #{order['id']} — {plan_title} — "
+                f"{server.title if server else 'نامشخص'}"
+            )
+            if order["status"] == "paid":
+                text += "\n" + _format_active_service_usage(h_users_map.get(order["id"]))
+                keyboard_rows.append([
+                    InlineKeyboardButton(
+                        f"🔄 تمدید سفارش #{order['id']}",
+                        callback_data=f"adm_renew_menu:{order['id']}",
+                    )
+                ])
+    else:
+        text += "📭 سفارش قبلی‌ای برای این کاربر وجود ندارد."
+
+    return text, InlineKeyboardMarkup(keyboard_rows)
 
 
 def _main_keyboard(user_id: int = None) -> ReplyKeyboardMarkup:
@@ -1391,20 +1492,39 @@ async def on_admin_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     order_id = int(query.data.split(":")[1])
     order = get_order(order_id)
-    if not order: return
-
-    server = SERVERS_BY_ID.get(order["server_id"])
-    if not server: return
+    if not order:
+        await query.answer("سفارش یافت نشد.", show_alert=True)
+        return
 
     await query.answer("در حال حذف...")
-    ok = await delete_user(server, order["hiddify_uuid"])
-    
-    if ok:
-        mark_failed(order_id) # Mark as failed/deleted in DB
-        await query.edit_message_text(f"🗑️ <b>سرویس با موفقیت از پنل هیدیفای و دیتابیس ربات حذف شد.</b>\n\n📦 شماره سفارش: <code>{order_id}</code>", parse_mode="HTML")
-        await query.answer("✅ حذف شد", show_alert=True)
-    else:
+
+    hiddify_result = "not_found"
+    server = SERVERS_BY_ID.get(order["server_id"])
+    if server and order.get("hiddify_uuid"):
+        hiddify_result = await delete_user(server, order["hiddify_uuid"])
+
+    if hiddify_result == "error":
         await query.answer("❌ خطا در حذف از پنل", show_alert=True)
+        return
+
+    if not delete_order(order_id):
+        await query.answer("❌ سفارش در دیتابیس یافت نشد.", show_alert=True)
+        return
+
+    if hiddify_result == "not_found":
+        text = (
+            f"🗑️ <b>سفارش از دیتابیس حذف شد.</b>\n\n"
+            f"⚠️ سرویس روی سرور هیدیفای یافت نشد (احتمالاً قبلاً حذف شده).\n\n"
+            f"📦 شماره سفارش: <code>{order_id}</code>"
+        )
+    else:
+        text = (
+            f"🗑️ <b>سرویس با موفقیت از پنل هیدیفای و دیتابیس ربات حذف شد.</b>\n\n"
+            f"📦 شماره سفارش: <code>{order_id}</code>"
+        )
+
+    await query.edit_message_text(text, parse_mode="HTML")
+    await query.answer("✅ حذف شد", show_alert=True)
 
 
 async def on_admin_renew_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1534,42 +1654,12 @@ async def on_admin_create_order_user(update: Update, context: ContextTypes.DEFAU
         await query.answer("انتخاب نامعتبر.", show_alert=True)
         return
 
-    user = get_db_user(telegram_id)
-    if not user:
+    await query.answer("در حال دریافت اطلاعات...")
+    text, reply_markup = await _build_admin_user_panel(telegram_id)
+    if text is None:
         await query.answer("کاربر یافت نشد.", show_alert=True)
         return
 
-    # Get user's orders
-    user_orders = get_user_orders(telegram_id, limit=20)
-    
-    # Prepare text and keyboard
-    text = f"👤 کاربر انتخابی:\n"
-    text += f"نام: {user['first_name']} {user['last_name'] or ''}\n"
-    text += f"نام کاربری: @{user['username'] or '—'}\n"
-    text += f"🆔: <code>{telegram_id}</code>\n"
-    text += "━━━━━━━━━━━━━━━━━━━━\n"
-    text += "لطفاً یک گزینه‌ای را انتخاب کنید:\n\n"
-    
-    keyboard_rows = [
-        [InlineKeyboardButton("➕ ثبت سفارش جدید", callback_data=f"adm_new_order_for_user:{telegram_id}")]
-    ]
-    
-    if user_orders:
-        text += "📋 سفارشات قبلی کاربر:\n"
-        for order in user_orders:
-            server = SERVERS_BY_ID.get(order["server_id"], None)
-            plan_title = "نامشخص"
-            for p in PLANS:
-                if p.id == order["plan_id"]:
-                    plan_title = p.title
-                    break
-            status_emoji = "✅" if order["status"] == "paid" else "⏳" if order["status"] == "pending" else "❌"
-            text += f"\n{status_emoji} سفارش #{order['id']} - {plan_title} - {server.title if server else 'نامشخص'}"
-            keyboard_rows.append([InlineKeyboardButton(f"🔄 تمدید سفارش #{order['id']}", callback_data=f"adm_renew_menu:{order['id']}")])
-    else:
-        text += "📭 سفارش قبلی‌ای برای این کاربر وجود ندارد."
-    
-    reply_markup = InlineKeyboardMarkup(keyboard_rows)
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=reply_markup)
 
 
@@ -1864,55 +1954,17 @@ async def chosen_inline_result_handler(update: Update, context: ContextTypes.DEF
     except ValueError:
         return
 
-    # Instead of editing the inline message, we send a new message to admin
-    # We need to send it directly to admin chat
     try:
-        # Create a fake update object to re-use on_admin_create_order_user logic
-        user = get_db_user(telegram_id)
-        if not user:
-            await context.bot.send_message(
-                chat_id=ADMIN_CHAT_ID,
-                text="❌ کاربر یافت نشد."
-            )
+        msg = await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text="⏳ در حال دریافت اطلاعات سرویس‌ها...",
+        )
+        text, reply_markup = await _build_admin_user_panel(telegram_id)
+        if text is None:
+            await msg.edit_text("❌ کاربر یافت نشد.")
             return
 
-        # Get user's orders
-        user_orders = get_user_orders(telegram_id, limit=20)
-        
-        # Prepare text and keyboard
-        text = f"👤 کاربر انتخابی:\n"
-        text += f"نام: {user['first_name']} {user['last_name'] or ''}\n"
-        text += f"نام کاربری: @{user['username'] or '—'}\n"
-        text += f"🆔: <code>{telegram_id}</code>\n"
-        text += "━━━━━━━━━━━━━━━━━━━━\n"
-        text += "لطفاً یک گزینه‌ای را انتخاب کنید:\n\n"
-        
-        keyboard_rows = [
-            [InlineKeyboardButton("➕ ثبت سفارش جدید", callback_data=f"adm_new_order_for_user:{telegram_id}")]
-        ]
-        
-        if user_orders:
-            text += "📋 سفارشات قبلی کاربر:\n"
-            for order in user_orders:
-                server = SERVERS_BY_ID.get(order["server_id"], None)
-                plan_title = "نامشخص"
-                for p in PLANS:
-                    if p.id == order["plan_id"]:
-                        plan_title = p.title
-                        break
-                status_emoji = "✅" if order["status"] == "paid" else "⏳" if order["status"] == "pending" else "❌"
-                text += f"\n{status_emoji} سفارش #{order['id']} - {plan_title} - {server.title if server else 'نامشخص'}"
-                keyboard_rows.append([InlineKeyboardButton(f"🔄 تمدید سفارش #{order['id']}", callback_data=f"adm_renew_menu:{order['id']}")])
-        else:
-            text += "📭 سفارش قبلی‌ای برای این کاربر وجود ندارد."
-        
-        reply_markup = InlineKeyboardMarkup(keyboard_rows)
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=reply_markup
-        )
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=reply_markup)
 
     except Exception as e:
-        log.error(f"Error in chosen_inline_result: {e}")
+        log.error("Error in chosen_inline_result: %s", e)

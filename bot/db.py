@@ -124,6 +124,17 @@ def mark_failed(order_id: int) -> None:
     log.warning("order %s marked failed", order_id)
 
 
+def delete_order(order_id: int) -> bool:
+    with _conn() as c:
+        cur = c.execute("DELETE FROM orders WHERE id = ?", (order_id,))
+        deleted = cur.rowcount > 0
+    if deleted:
+        log.info("order %s deleted from database", order_id)
+    else:
+        log.warning("order %s not found in database for deletion", order_id)
+    return deleted
+
+
 def update_order_plan(order_id: int, plan_id: str, amount_rial: int) -> None:
     with _conn() as c:
         c.execute(

@@ -127,7 +127,8 @@ async def update_user_status(server: Server, user_uuid: str, enable: bool) -> bo
             return False
 
 
-async def delete_user(server: Server, user_uuid: str) -> bool:
+async def delete_user(server: Server, user_uuid: str) -> str:
+    """Delete user from Hiddify. Returns 'deleted', 'not_found', or 'error'."""
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             r = await client.delete(
@@ -135,10 +136,26 @@ async def delete_user(server: Server, user_uuid: str) -> bool:
                 headers=_headers(server)
             )
             r.raise_for_status()
-            return True
+            return "deleted"
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                log.warning(
+                    "hiddify user not found server=%s uuid=%s",
+                    server.id,
+                    user_uuid,
+                )
+                return "not_found"
+            log.error(
+                "hiddify delete user HTTP %s server=%s uuid=%s body=%s",
+                e.response.status_code,
+                server.id,
+                user_uuid,
+                e.response.text[:500],
+            )
+            return "error"
         except httpx.HTTPError as e:
             log.error("hiddify delete user error server=%s uuid=%s: %s", server.id, user_uuid, e)
-            return False
+            return "error"
 
 
 async def update_user_plan(server: Server, user_uuid: str, plan: Plan) -> bool:
