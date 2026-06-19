@@ -19,5 +19,13 @@
     "days": 30,
     "gb": 30,
     "price_rial": 3500000
+  },
+  {
+    "id": "economy_1month_5gb",
+    "title": "اقتصادی — یک ماه — ۵ گیگ",
+    "days": 30,
+    "gb": 5,
+    "price_rial": 800000,
+    "type": "economy"
   }
 ]

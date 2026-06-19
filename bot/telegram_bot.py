@@ -43,6 +43,7 @@ from bot.config import (
     TELEGRAM_BOT_TOKEN,
     Plan,
     Server,
+    servers_for_plan,
 )
 from bot.db import (
     count_all_orders,
@@ -250,10 +251,11 @@ def _main_keyboard(user_id: int = None) -> ReplyKeyboardMarkup:
 def _plans_keyboard() -> InlineKeyboardMarkup:
     rows = []
     for i, p in enumerate(PLANS):
+        emoji = "💰" if p.type == "economy" else "💎"
         rows.append(
             [
                 InlineKeyboardButton(
-                    f"💎 {p.title} — {p.price_rial:,} ریال",
+                    f"{emoji} {p.title} — {p.price_rial:,} ریال",
                     callback_data=f"buy:{i}",
                 )
             ]
@@ -262,15 +264,13 @@ def _plans_keyboard() -> InlineKeyboardMarkup:
 
 
 def _servers_keyboard(plan_index: int, server_statuses: dict[str, bool]) -> InlineKeyboardMarkup:
+    plan = PLANS[plan_index]
+    servers = servers_for_plan(plan)
     rows = []
-    for i, s in enumerate(SERVERS):
+    for i, s in enumerate(servers):
         is_active = server_statuses.get(s.id, False)
         status_text = "🟢 فعال" if is_active else "🔴 غیرفعال"
-        
-        # If inactive, we can still show it but maybe with a different callback or alert
-        # The user requested: "اگه غیرفعال بود نتونه انتخابش کنه"
         callback_data = f"srv:{plan_index}:{i}" if is_active else "inactive_server"
-        
         rows.append(
             [
                 InlineKeyboardButton(
@@ -1304,6 +1304,14 @@ async def on_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await query.answer()
     
+    servers = servers_for_plan(plan)
+    if not servers:
+        await query.edit_message_text(
+            f"💎 پلن انتخاب شده: {plan.title}\n\n"
+            "⚠️ در حال حاضر سرور فعالی برای این پلن موجود نیست."
+        )
+        return
+
     # Show loading message
     await query.edit_message_text(
         f"💎 پلن انتخاب شده: {plan.title}\n"
@@ -1312,15 +1320,16 @@ async def on_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Check server statuses in parallel
     async with httpx.AsyncClient(timeout=3) as client:
-        tasks = [check_server_status(s, client=client) for s in SERVERS]
+        tasks = [check_server_status(s, client=client) for s in servers]
         results = await asyncio.gather(*tasks)
-        server_statuses = {s.id: res for s, res in zip(SERVERS, results)}
+        server_statuses = {s.id: res for s, res in zip(servers, results)}
 
     log.info(
-        "plan selected telegram_id=%s plan=%s — showing %d servers",
+        "plan selected telegram_id=%s plan=%s type=%s — showing %d servers",
         query.from_user.id,
         plan.id,
-        len(SERVERS),
+        plan.type,
+        len(servers),
     )
     await query.edit_message_text(
         f"💎 پلن انتخاب شده: {plan.title}\n"
@@ -1340,7 +1349,7 @@ async def on_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         _, plan_index_s, server_index_s = query.data.split(":", 2)
         plan = PLANS[int(plan_index_s)]
-        server = SERVERS[int(server_index_s)]
+        server = servers_for_plan(plan)[int(server_index_s)]
     except (ValueError, IndexError):
         log.warning("invalid server callback data=%r", query.data)
         await query.answer("انتخاب نامعتبر", show_alert=True)
@@ -1714,6 +1723,11 @@ async def on_admin_create_order_plan(update: Update, context: ContextTypes.DEFAU
         await query.answer("پلن یافت نشد.", show_alert=True)
         return
 
+    servers = servers_for_plan(plan)
+    if not servers:
+        await query.edit_message_text("⚠️ در حال حاضر سرور فعالی برای این پلن موجود نیست.")
+        return
+
     # Store plan in context
     context.user_data["create_order_plan"] = plan_index
 
@@ -1724,13 +1738,13 @@ async def on_admin_create_order_plan(update: Update, context: ContextTypes.DEFAU
 
     # Check server statuses in parallel
     async with httpx.AsyncClient(timeout=3) as client:
-        tasks = [check_server_status(s, client=client) for s in SERVERS]
+        tasks = [check_server_status(s, client=client) for s in servers]
         results = await asyncio.gather(*tasks)
-        server_statuses = {s.id: res for s, res in zip(SERVERS, results)}
+        server_statuses = {s.id: res for s, res in zip(servers, results)}
 
     # Show server selection
     keyboard_rows = []
-    for i, server in enumerate(SERVERS):
+    for i, server in enumerate(servers):
         is_active = server_statuses.get(server.id, False)
         status_text = "🟢 فعال" if is_active else "🔴 غیرفعال"
         if is_active:
@@ -1765,7 +1779,7 @@ async def on_admin_create_order_server(update: Update, context: ContextTypes.DEF
         return
 
     plan = PLANS[plan_index]
-    server = SERVERS[server_index]
+    server = servers_for_plan(plan)[server_index]
 
     await query.answer("در حال ایجاد سرویس...")
     await query.edit_message_text("⏳ در حال ایجاد سرویس...")

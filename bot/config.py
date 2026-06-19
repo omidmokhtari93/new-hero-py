@@ -11,6 +11,7 @@ class Plan:
     days: int
     gb: int
     price_rial: int
+    type: str = "standard"
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class Server:
     admin_path: str
     api_key: str
     user_path: str
+    type: str = "standard"
 
 
 def _load_plans() -> list[Plan]:
@@ -30,7 +32,17 @@ def _load_plans() -> list[Plan]:
             Plan("30d_50gb", "یک ماه — ۵۰ گیگ", 30, 50, 99_000),
         ]
     data = json.loads(path.read_text(encoding="utf-8"))
-    return [Plan(**p) for p in data]
+    return [
+        Plan(
+            id=p["id"],
+            title=p["title"],
+            days=p["days"],
+            gb=p["gb"],
+            price_rial=p["price_rial"],
+            type=p.get("type", "standard"),
+        )
+        for p in data
+    ]
 
 
 def _load_servers() -> list[Server]:
@@ -47,9 +59,14 @@ def _load_servers() -> list[Server]:
             admin_path=s["admin_path"].strip("/"),
             api_key=s["api_key"],
             user_path=s["user_path"].strip("/"),
+            type=s.get("type", "standard"),
         )
         for s in data
     ]
+
+
+def servers_for_plan(plan: Plan) -> list[Server]:
+    return [s for s in SERVERS if s.type == plan.type]
 
 
 PLANS = _load_plans()
