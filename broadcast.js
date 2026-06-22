@@ -1,64 +1,120 @@
+const fs = require("fs");
 
- const BOT_TOKEN = "8352464098:AAGZEbTUAiHRIQuuf3twqjIFes6SFIJ18GQ";
+const BOT_TOKEN = "5719431335:AAHRk1vFhBqSQJbx7k1LmQWoFpR1SMf0QS8";
 
- const chatIds = [
-   399163123, 1595555709,   67693990, 6305042492,   90855656,
-   102195535, 1070441780, 5200733161, 2011037200, 1029034235,
-   437524380,  371466546,  196623178,  113946613,  653699591,
-   366885409,  576912042,  852819516, 1968143611,  123259006,
-    28465150,  602110796,  123502502,  303563110, 1910507117,
-  1061012690,  570441868,   92131508, 6604717089,  134604686,
-    89065279,  635764292,   82558351,  428532183,  416103476,
-  5265250215, 1065788634, 6685786483,  902638397, 1030058361,
-   561227454,  219476348, 1788105817,  283476318, 5538443962,
-   567887475,  125047322, 5689037124,  103210145, 7260393378,
-   111217905,  811824096,  182935556,  510856679, 6347279822,
-    36115647,  228006897, 5644495417, 7519068492,   97087109,
-   182923347,  811960464,  271591159,  936819794, 1312711423,
-  7609257674, 7384847936, 5244369933,  107683779, 6186733766,
-   229977104, 1542633846, 1855983671, 5594989963, 5348636310,
-   108848828, 1994864208, 7163280462,  422679320,  171794796,
-  6859230616, 5743446639,  129119302, 6311871968,   92297109,
-    79113490, 1262278149,  859870303, 7814228191
-]
+const chatIds = require("./chat_ids.json");
+//[399163123];
 
- const message = `🔷 سرور آمریکا اضافه شد 🔷
+const message = `سرور 🇨🇦 کانادا 🇨🇦 اضافه شد.
 
-دکمه استارت رو بزنید و از قسمت خرید سرویس جدید میتونید اونو دریافت کنید
-پشتیانی: @hero_support1
+خرید از اینجا 👇
+🤖👉https://t.me/hero_vpnbot?start
 
-👇 برای شروع ربات، روی دکمه زیر بزنید:
+پشتیبانی:
+📩@hero_support1`;
 
-/start`;
+const report = {
+  success: [],
+  failed: [],
+  retry: [],
+};
 
- async function sendMessages() {
-   for (const chatId of chatIds) {
-     try {
-       const response = await fetch(
-         `https:api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
-         {
-           method: "POST",
-           headers: {
-             "Content-Type": "application/json",
-           },
-           body: JSON.stringify({
-             chat_id: chatId,
-             text: message,
-           }),
-         }
-       );
+let globalPause = false;
+let resumeTime = 0;
 
-       const data = await response.json();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-       if (data.ok) {
-         console.log(`✓ Sent to ${chatId}`);
-       } else {
-         console.log(`✗ Failed for ${chatId}`, data);
-       }
-     } catch (err) {
-       console.error(`✗ Error for ${chatId}`, err);
-     }
-   }
- }
+async function sendMessage(chatId) {
+  try {
+    const res = await fetch("https://tbot.omidmokhtari93.workers.dev", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        botToken: BOT_TOKEN,
+        method: "sendMessage",
+        payload: {
+          chat_id: chatId,
+          text: message,
+        },
+      }),
+    });
 
- sendMessages();
+    const data = await res.json();
+
+    // 🚨 Rate limit
+    if (!data.ok && data.parameters?.retry_after) {
+      const waitTime = data.parameters.retry_after * 1000;
+
+      console.log(`⛔ Rate limit → wait ${waitTime}ms`);
+
+      globalPause = true;
+      resumeTime = Date.now() + waitTime;
+
+      await sleep(waitTime);
+
+      globalPause = false;
+
+      // دوباره باید retry بشه
+      return { status: "retry" };
+    }
+
+    if (!data.ok) {
+      console.log(`✗ Failed ${chatId}`, data.description);
+      return { status: "failed", reason: data.description };
+    }
+
+    console.log(`✓ Sent ${chatId}`);
+    return { status: "success" };
+  } catch (err) {
+    console.log(`✗ Error ${chatId}`, err.message);
+    return { status: "failed", reason: err.message };
+  }
+}
+
+async function worker(queue) {
+  while (queue.length) {
+    if (globalPause) {
+      const wait = resumeTime - Date.now();
+      if (wait > 0) await sleep(wait);
+    }
+
+    const chatId = queue.shift();
+    if (!chatId) break;
+
+    const result = await sendMessage(chatId);
+
+    if (result.status === "success") {
+      report.success.push(chatId);
+    } else if (result.status === "failed") {
+      report.failed.push({
+        chatId,
+        reason: result.reason,
+      });
+    } else if (result.status === "retry") {
+      report.retry.push(chatId);
+      queue.push(chatId); // برگرد به صف
+    }
+
+    await sleep(30);
+  }
+}
+
+async function sendMessages() {
+  const queue = [...new Set(chatIds)];
+
+  const concurrency = 5;
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker(queue)));
+
+  // 💾 ذخیره گزارش نهایی
+  fs.writeFileSync("report.json", JSON.stringify(report, null, 2));
+
+  console.log("📄 Report saved to report.json");
+  console.log(`Success: ${report.success.length}`);
+  console.log(`Failed: ${report.failed.length}`);
+  console.log(`Retry: ${report.retry.length}`);
+}
+
+sendMessages();
