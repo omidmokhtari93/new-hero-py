@@ -1998,6 +1998,31 @@ async def on_confirm_server_change(update: Update, context: ContextTypes.DEFAULT
         
         await msg.edit_text(success_text, parse_mode="HTML")
         
+        # Notify admin about the server change
+        try:
+            # Get plan to find total limit
+            plan = next((p for p in PLANS if p.id == order["plan_id"]), None)
+            limit_gb = plan.gb if plan else "نامشخص"
+            
+            admin_notification = (
+                f"🔄 <b>تغییر سرور توسط کاربر</b>\n\n"
+                f"👤 کاربر: <code>{order['telegram_id']}</code>\n"
+                f"📦 سفارش: <code>{order_id}</code>\n"
+                f"🌍 از: {old_server.title}\n"
+                f"🌍 به: {new_server.title}\n"
+                f"📊 حجم مصرف‌شده: {usage_gb:.2f} GB\n"
+                f"📊 حجم کل: {limit_gb} GB\n"
+                f"⏳ زمان باقیمانده: {int(remaining_days)} روز\n"
+                f"🔗 لینک اشتراک جدید:\n<code>{new_sub_url}</code>"
+            )
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=admin_notification,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            log.error(f"Failed to send server change notification to admin: {e}")
+        
         log.info(f"Server change completed: order={order_id} from={old_server.id} to={new_server.id}")
         
     except Exception as e:
