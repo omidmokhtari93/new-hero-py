@@ -4,7 +4,7 @@ import shutil
 import time
 import asyncio
 import httpx
-from datetime import datetime
+from datetime import datetime, date
 
 import jdatetime
 import pytz
@@ -61,6 +61,7 @@ from bot.db import (
     search_order_by_uuid,
     search_users,
     update_order_plan,
+    update_order_server,
     upsert_user,
 )
 from bot.hiddify import (
@@ -492,13 +493,15 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         valid_orders = []
         for order in orders:
             server = SERVERS_BY_ID.get(order["server_id"])
-            if server:
+            if server and order["status"] == "paid":
                 tasks.append(get_user(server, order["hiddify_uuid"], client=client))
                 valid_orders.append((order, server))
         
         h_users = await asyncio.gather(*tasks)
 
     text = "👤 <b>سرویس‌های اخیر شما:</b>\n\n"
+    keyboard_rows = []
+    
     for (order, server), h_user in zip(valid_orders, h_users):
         sub_url = subscription_url(server, order["hiddify_uuid"], label=f"HeroVPN - {server.title}")
         
@@ -548,8 +551,18 @@ async def my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             f"🔗 لینک اشتراک (برای کپی لمس کنید):\n<code>{sub_url}</code>\n"
             f"--------------------------\n"
         )
+        
+        # Add action button for change server
+        keyboard_rows.append([
+            InlineKeyboardButton(f"🔄 تغییر سرور #{order['id']}", callback_data=f"chg_srv:{order['id']}"),
+        ])
 
-    await msg.edit_text(text, parse_mode="HTML")
+    await msg.edit_text(
+        text, 
+        parse_mode="HTML", 
+        reply_markup=InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None
+    )
+
 
 
 async def account_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1824,6 +1837,198 @@ async def on_admin_create_order_server(update: Update, context: ContextTypes.DEF
         await query.edit_message_text(f"❌ خطا در ایجاد سرویس: {e}")
 
 
+async def on_change_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show available servers for server change."""
+    query = update.callback_query
+    await query.answer()
+    
+    order_id = int(query.data.split(":")[1])
+    order = get_order(order_id)
+    
+    if not order:
+        await query.answer("سفارش یافت نشد.", show_alert=True)
+        return
+    
+    if order["status"] != "paid":
+        await query.answer("تنها سرویس‌های فعال (پرداخت شده) را می‌توان تغییر داد.", show_alert=True)
+        return
+    
+    current_server = SERVERS_BY_ID.get(order["server_id"])
+    current_plan = next((p for p in PLANS if p.id == order["plan_id"]), None)
+    
+    if not current_server or not current_plan:
+        await query.answer("اطلاعات سفارش ناقص است.", show_alert=True)
+        return
+    
+    # Get available servers for this plan type
+    available_servers = servers_for_plan(current_plan)
+    
+    # Filter out current server
+    other_servers = [s for s in available_servers if s.id != current_server.id]
+    
+    if not other_servers:
+        await query.answer("سرور دیگری برای این پلن موجود نیست.", show_alert=True)
+        return
+    
+    text = (
+        f"🌍 <b>تغییر سرور</b>\n\n"
+        f"📦 سفارش: <code>{order_id}</code>\n"
+        f"💎 پلن: {current_plan.title}\n"
+        f"🌐 سرور فعلی: {current_server.title}\n\n"
+        f"لطفاً سرور جدید را انتخاب کنید:\n"
+        f"<i>⚠️ توجه: حجم و زمان باقیمانده محفوظ خواهد ماند.</i>"
+    )
+    
+    keyboard_rows = []
+    for server in other_servers:
+        keyboard_rows.append([
+            InlineKeyboardButton(
+                f"🌍 {server.title}",
+                callback_data=f"confirm_srv_chg:{order_id}:{server.id}",
+            )
+        ])
+    
+    keyboard_rows.append([InlineKeyboardButton("❌ لغو", callback_data=f"cancel_srv_chg:{order_id}")])
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard_rows), parse_mode="HTML")
+
+
+async def on_confirm_server_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Complete the server change for a service."""
+    query = update.callback_query
+    await query.answer()
+    
+    parts = query.data.split(":")
+    order_id = int(parts[1])
+    new_server_id = parts[2]
+    
+    order = get_order(order_id)
+    old_server = SERVERS_BY_ID.get(order["server_id"])
+    new_server = SERVERS_BY_ID.get(new_server_id)
+    
+    if not order or not old_server or not new_server or order["status"] != "paid":
+        await query.answer("خطا: سفارش یا سرور یافت نشد.", show_alert=True)
+        return
+    
+    msg = await query.edit_message_text("⏳ در حال انتقال سرویس...")
+    
+    try:
+        # Fetch current user data from old server
+        old_h_user = await get_user(old_server, order["hiddify_uuid"])
+        
+        if not old_h_user:
+            raise Exception("اطلاعات کاربر از سرور قدیم دریافت نشد")
+        
+        # Extract data we need to preserve
+        usage_gb = old_h_user.get("current_usage_GB", 0)
+        start_date = old_h_user.get("start_date")
+        package_days = old_h_user.get("package_days", 0)
+        
+        # Calculate remaining days
+        remaining_days = old_h_user.get("remaining_days")
+        if remaining_days is None or not isinstance(remaining_days, (int, float)):
+            # Calculate manually from start_date and package_days
+            if start_date and package_days:
+                try:
+                    start_date_obj = datetime.fromisoformat(start_date)
+                    today = datetime.now(pytz.utc).date()
+                    days_passed = (today - start_date_obj.date()).days
+                    remaining_days = max(package_days - days_passed, 0)
+                except Exception:
+                    remaining_days = package_days
+            else:
+                remaining_days = package_days
+        
+        # Create user on new server with preserved data
+        plan = next((p for p in PLANS if p.id == order["plan_id"]), None)
+        if not plan:
+            raise Exception("پلن یافت نشد")
+        
+        # Create new user with same plan details but on new server
+        new_user_data = await create_user(new_server, order["telegram_id"], plan)
+        new_uuid = new_user_data.get("uuid")
+        
+        if not new_uuid:
+            raise Exception("خطا در ایجاد کاربر در سرور جدید")
+        
+        # Transfer usage and remaining days to new user
+        if remaining_days > 0 or usage_gb > 0:
+            new_start_date = date.today().isoformat()
+            
+            import httpx
+            async with httpx.AsyncClient(timeout=10) as client:
+                from bot.hiddify import _admin_url, _headers
+                try:
+                    await client.patch(
+                        _admin_url(new_server, f"/user/{new_uuid}/"),
+                        headers=_headers(new_server),
+                        json={
+                            "current_usage_GB": usage_gb,
+                            "start_date": new_start_date,
+                            "package_days": int(remaining_days),
+                        }
+                    )
+                    log.info(f"Transferred to new server: usage={usage_gb}GB, remaining_days={remaining_days}")
+                except Exception as e:
+                    log.warning(f"Failed to transfer usage/dates: {e}")
+        
+        # Delete user from old server
+        delete_result = await delete_user(old_server, order["hiddify_uuid"])
+        if delete_result == "error":
+            log.warning(f"Failed to delete user from old server {old_server.id}")
+        
+        # Update database
+        update_order_server(order_id, new_server_id)
+        # Also update the UUID in case it changed
+        mark_paid(order_id, new_uuid)
+        
+        # Get new subscription URL
+        new_sub_url = subscription_url(new_server, new_uuid, label=f"HeroVPN - {new_server.title}")
+        
+        # Notify user
+        success_text = (
+            f"✅ <b>سرویس شما با موفقیت منتقل شد!</b>\n\n"
+            f"🌍 سرور قدیم: {old_server.title}\n"
+            f"🌍 سرور جدید: {new_server.title}\n"
+            f"📊 مصرف‌شده: {usage_gb:.2f} GB (محفوظ)\n"
+            f"⏳ زمان باقیمانده: محفوظ\n\n"
+            f"🔗 لینک اشتراک جدید:\n<code>{new_sub_url}</code>\n\n"
+            f"💡 نکته: لطفاً پروفایل قدیم را از Hiddify حذف کرده و پروفایل جدید را اضافه کنید."
+        )
+        
+        await msg.edit_text(success_text, parse_mode="HTML")
+        
+        log.info(f"Server change completed: order={order_id} from={old_server.id} to={new_server.id}")
+        
+    except Exception as e:
+        log.error(f"Server change failed: {e}")
+        error_text = (
+            f"❌ <b>خطا در انتقال سرویس:</b>\n\n"
+            f"{str(e)}\n\n"
+            f"لطفاً با پشتیبانی تماس بگیرید."
+        )
+        await msg.edit_text(error_text, parse_mode="HTML")
+
+
+async def on_cancel_server_change(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Cancel server change operation."""
+    query = update.callback_query
+    await query.answer()
+    
+    order_id = int(query.data.split(":")[1])
+    order = get_order(order_id)
+    
+    if not order:
+        return
+    
+    server = SERVERS_BY_ID.get(order["server_id"])
+    if not server:
+        return
+    
+    # Refresh to show current service info
+    await _refresh_search_message(query, order_id)
+
+
 async def on_inactive_server(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer("⚠️ این سرور در حال حاضر غیرفعال است. لطفاً سرور دیگری را انتخاب کنید.", show_alert=True)
@@ -1884,6 +2089,9 @@ def build_telegram_app() -> Application:
     app.add_handler(CallbackQueryHandler(on_admin_create_order_server, pattern=r"^adm_create_order_server:\d+:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_orders_page, pattern=r"^adm_orders:\d+$"))
     app.add_handler(CallbackQueryHandler(on_admin_stats_refresh, pattern=r"^adm_stats_ref$"))
+    app.add_handler(CallbackQueryHandler(on_change_server, pattern=r"^chg_srv:\d+$"))
+    app.add_handler(CallbackQueryHandler(on_confirm_server_change, pattern=r"^confirm_srv_chg:\d+:.+$"))
+    app.add_handler(CallbackQueryHandler(on_cancel_server_change, pattern=r"^cancel_srv_chg:\d+$"))
     app.add_handler(CallbackQueryHandler(on_unhandled_callback))
     # Inline query handlers
     app.add_handler(InlineQueryHandler(inline_query_handler))

@@ -198,6 +198,15 @@ def search_order_by_uuid(uuid: str):
         return dict(row) if row else None
 
 
+def update_order_server(order_id: int, server_id: str) -> None:
+    with _conn() as c:
+        c.execute(
+            "UPDATE orders SET server_id = ? WHERE id = ?",
+            (server_id, order_id),
+        )
+    log.info("order %s updated server=%s", order_id, server_id)
+
+
 def upsert_user(telegram_id: int, first_name: str, last_name: str = None, username: str = None) -> None:
     with _conn() as c:
         # First check if user exists
