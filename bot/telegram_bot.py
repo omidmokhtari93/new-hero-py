@@ -64,6 +64,7 @@ from bot.db import (
     update_order_server,
     upsert_user,
 )
+from bot.prices import fetch_prices
 from bot.hiddify import (
     check_server_status,
     create_user,
@@ -2081,6 +2082,7 @@ def build_telegram_app() -> Application:
     app.add_handler(TypeHandler(Update, _log_update), group=-1)
     
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler(["price", "prices"], admin_show_prices))
     app.add_handler(MessageHandler(filters.Text(BTN_BUY_SERVICE), buy_service))
     app.add_handler(MessageHandler(filters.Text(BTN_MY_SERVICES), my_services))
     app.add_handler(MessageHandler(filters.Text(BTN_ACCOUNT_INFO), account_info))
@@ -2092,6 +2094,7 @@ def build_telegram_app() -> Application:
     # Admin reply handler must come BEFORE admin_search_user_handler
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.REPLY, reply_from_admin_to_user))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#broadcast"), broadcast_message))
+    app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#send_prices"), admin_broadcast_prices))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Regex(r"#search"), search_order))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#restore"), restore_db))
     app.add_handler(MessageHandler(filters.Chat(ADMIN_CHAT_ID) & filters.Document.ALL & filters.CaptionRegex(r"#update_users"), update_users_from_json))
@@ -2128,8 +2131,8 @@ def build_telegram_app() -> Application:
         # Check if job already exists to prevent duplicates
         if not job_queue.get_jobs_by_name("db_backup"):
             job_queue.run_repeating(
-                send_db_backup, 
-                interval=BACKUP_INTERVAL_HOURS * 3600, 
+                send_db_backup,
+                interval=BACKUP_INTERVAL_HOURS * 3600,
                 first=BACKUP_INTERVAL_HOURS * 3600,  # Start after the interval
                 name="db_backup"
             )
@@ -2139,6 +2142,81 @@ def build_telegram_app() -> Application:
 
     log.info("telegram handlers registered: start, plan, server, fallback")
     return app
+
+
+async def admin_show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show current prices to admin only (no broadcast)."""
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+    msg = await update.message.reply_text("⏳ در حال دریافت قیمت‌ها...")
+    prices = await fetch_prices()
+    if not prices:
+        await msg.edit_text("❌ خطا در دریافت قیمت‌ها از tgju.org")
+        return
+    jalali_now = _get_jalali_now()
+    text = (
+        f"💹 <b>قیمت لحظه‌ای ارز و طلا</b>\n"
+        f"📅 {jalali_now}\n\n"
+        f"💵 دلار آمریکا: <b>{prices['usd']}</b> تومان\n"
+        f"💶 یورو: <b>{prices['eur']}</b> تومان\n"
+        f"🥇 طلای ۱۸ عیار (گرم): <b>{prices['gold18']}</b> تومان\n"
+        f"🪙 سکه بهار آزادی: <b>{prices['coin']}</b> تومان\n\n"
+        f"📌 منبع: <a href='https://tgju.org'>tgju.org</a>\n\n"
+        f"<i>این پیام فقط برای ادمین است. برای ارسال به همه کاربران: #send_prices</i>"
+    )
+    await msg.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
+
+
+async def admin_broadcast_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manually trigger the daily prices broadcast to all users."""
+    if update.effective_user.id != ADMIN_CHAT_ID:
+        return
+    await update.message.reply_text("⏳ در حال ارسال قیمت‌ها به همه کاربران...")
+    await send_daily_prices(context)
+
+
+async def send_daily_prices(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fetch and broadcast daily gold/currency prices to all users."""
+    prices = await fetch_prices()
+    if not prices:
+        log.error("Daily price broadcast skipped: could not fetch prices from tgju.org")
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text="⚠️ خطا در دریافت قیمت‌ها از tgju.org. پیام روزانه ارسال نشد.",
+        )
+        return
+
+    jalali_now = _get_jalali_now()
+    text = (
+        f"💹 <b>قیمت لحظه‌ای ارز و طلا</b>\n"
+        f"📅 {jalali_now}\n\n"
+        f"💵 دلار آمریکا: <b>{prices['usd']}</b> تومان\n"
+        f"💶 یورو: <b>{prices['eur']}</b> تومان\n"
+        f"🥇 طلای ۱۸ عیار (گرم): <b>{prices['gold18']}</b> تومان\n"
+        f"🪙 سکه بهار آزادی: <b>{prices['coin']}</b> تومان\n\n"
+        f"📌 منبع: <a href='https://tgju.org'>tgju.org</a>"
+    )
+
+    users = get_all_users()
+    success, failed = 0, 0
+    for user_id in users:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            success += 1
+        except Exception as e:
+            log.warning("Daily price broadcast failed for user %s: %s", user_id, e)
+            failed += 1
+
+    log.info("Daily prices broadcast complete: success=%d failed=%d", success, failed)
+    await context.bot.send_message(
+        chat_id=ADMIN_CHAT_ID,
+        text=f"📊 ارسال قیمت روزانه تمام شد.\n✅ موفق: {success} | ❌ ناموفق: {failed}",
+    )
 
 
 async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
